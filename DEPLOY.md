@@ -20,9 +20,15 @@ is about six commands.
    fly auth login
    ```
 
-3. **A domain you own** — any registrar. The daemon will point at
+3. **A credit card on the Fly account** — the trial stops every machine
+   after 5 minutes (observed on first deploy, 2026-07-08); a stopped relay
+   drops all live pairings. Add one at https://fly.io/trial before relying
+   on the deploy.
+4. **A domain you own** — any registrar. The daemon will point at
    `relay.<your-domain>`; owning the name is what keeps Fly replaceable by
-   any VPS later without touching installed daemons.
+   any VPS later without touching installed daemons. Not a blocker for
+   deploying and smoking against `genui-relay.fly.dev`; it IS a blocker for
+   launch (the daemon-side URL must be ours, never the platform's).
 
 ## 1. First deploy
 
@@ -30,11 +36,16 @@ From this repo's root:
 
 ```
 fly apps create genui-relay
-fly deploy
+fly deploy --ha=false
 ```
 
-`fly deploy` builds the Dockerfile remotely and starts one machine in `iad`
-(both pinned in `fly.toml`). Watch for the health check going green.
+`fly deploy` builds the Dockerfile remotely and starts the machine in `iad`.
+Watch for the health check going green. **`--ha=false` matters:** without it
+the first deploy creates TWO machines (Fly's high-availability default), and
+pair affinity needs exactly one — a daemon on machine A and a phone on
+machine B never meet. It happened on the real first deploy (2026-07-08);
+the fix after the fact is `fly scale count 1`. Verify with `fly status`:
+exactly one machine, `1 total, 1 passing`.
 
 If the app name `genui-relay` is taken globally, pick another
 (`fly apps create <name>` + update `app = ` in `fly.toml`) — the public name
@@ -61,6 +72,9 @@ to report the certificate issued (usually minutes after DNS propagates).
 ```
 npm run smoke -- wss://relay.<your-domain>
 ```
+
+(Before the domain exists, the same check works against the platform name:
+`npm run smoke -- wss://genui-relay.fly.dev`.)
 
 Green means: health answers over HTTPS, a daemon and viewport pair up, an
 opaque payload round-trips byte-identically, and a bogus pair id is refused.
