@@ -23,8 +23,8 @@ async function relay(opts: RelayOptions = {}): Promise<Relay> {
   return startRelay({ host: "127.0.0.1", heartbeatMs: 0, log: () => {}, ...opts });
 }
 
-function dial(r: Relay, path: string, pair: string): WebSocket {
-  return new WebSocket(`ws://127.0.0.1:${r.port}${path}?pair=${pair}`);
+function dial(r: Relay, path: string, pair: string, headers?: Record<string, string>): WebSocket {
+  return new WebSocket(`ws://127.0.0.1:${r.port}${path}?pair=${pair}`, { headers });
 }
 
 /** Resolves once open; rejects if the server closes/refuses it first. */
@@ -147,6 +147,39 @@ test("caps total connections globally", async () => {
     await opened(dial(r, "/ws", PAIR));
     assert.equal(r.connections(), 2);
     assert.equal(await closeCode(dial(r, "/ws", PAIR)), CLOSE_OVERLOADED);
+  } finally {
+    await r.close();
+  }
+});
+
+test("caps live connections from one source IP", async () => {
+  // All test sockets share 127.0.0.1, so two fill the cap and the third —
+  // whichever kind — is refused. Stops one host eating the global budget.
+  const r = await relay({ maxConnectionsPerIp: 2 });
+  try {
+    await opened(dial(r, "/daemon", PAIR));
+    await opened(dial(r, "/ws", PAIR));
+    assert.equal(await closeCode(dial(r, "/ws", PAIR)), CLOSE_OVERLOADED);
+  } finally {
+    await r.close();
+  }
+});
+
+test("per-IP cap keys on the configured trusted header, and frees on close", async () => {
+  const r = await relay({ maxConnectionsPerIp: 2, clientIpHeader: "x-real-ip" });
+  const ONE = { "x-real-ip": "1.1.1.1" };
+  const TWO = { "x-real-ip": "2.2.2.2" };
+  try {
+    await opened(dial(r, "/daemon", PAIR, ONE)); // 1.1.1.1 slot 1
+    const v1 = await opened(dial(r, "/ws", PAIR, ONE)); // slot 2 — now at cap
+    // A different source is unaffected — separate bucket.
+    await opened(dial(r, "/daemon", "second-pair-id-22-char", TWO));
+    // A third from the saturated source is refused.
+    assert.equal(await closeCode(dial(r, "/ws", PAIR, ONE)), CLOSE_OVERLOADED);
+    // Freeing one of that source's slots (the pair stays up) lets it back in.
+    v1.close();
+    await new Promise((res) => setTimeout(res, 100));
+    await opened(dial(r, "/ws", PAIR, ONE));
   } finally {
     await r.close();
   }
