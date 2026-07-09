@@ -95,8 +95,14 @@ scripts/smoke.mjs post-deploy go/no-go against the live relay
 scripts/sync-from-genui-shell.sh   pull/check the shared files (see above)
 Dockerfile        multi-stage, npm ci, runs as the unprivileged node user
 fly.toml          single instance, /health check, auto_stop_machines=false
+ARCHITECTURE.md   ground-up design: vocabulary, frame-routing flows, decisions
 DEPLOY.md         the deploy-day runbook, command by command
 ```
+
+New to this service? **[ARCHITECTURE.md](ARCHITECTURE.md)** is the guided tour —
+the vocabulary (daemon, viewport, pair, pairing code), how a frame is routed end
+to end, exactly what the relay can and cannot see, the unusual two-repo sync
+relationship with genui-shell, and the reasoning behind every constraint.
 
 ## Run and test it
 
