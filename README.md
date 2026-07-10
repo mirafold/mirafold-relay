@@ -23,6 +23,14 @@ paid tier's substrate (genui-shell PLAN Phase R).
   the relay never sees — see genui-shell `server/relay-crypto.ts`). The relay
   routes on `t`/`v`/`pair` only. It logs no frame contents and stores nothing.
 - **Serves no application bundle.** The only HTTP it answers is `GET /health`.
+- **Enforces no credential policy — that lives in the daemon.** Only API-key or
+  local/BYO sessions may be driven over the relay; a subscription-backed session
+  is refused *by the genui-shell daemon* (`server/provider-policy.ts`, PLAN
+  R.4i), before any frame is sent, independent of the paid entitlement (R.5).
+  Because the relay is E2E-blind it can't tell one session from another anyway —
+  and doesn't need to. The rule: charging for remote access to a
+  subscription-driven agent trips the closed providers' reselling clauses, so
+  the relay is BYO-API-key by construction.
 
 ### The trust decision (why it serves no JS)
 
