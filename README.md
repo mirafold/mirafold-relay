@@ -93,7 +93,7 @@ app's own floor, not the whole defense.
 ## Repository layout
 
 ```
-src/contract.ts   the routing envelope + close codes (VENDORED from genui-shell
+src/contract.ts   the routing envelope + close codes (VENDORED from mirafold
                   server/relay-protocol.ts; a sync-guard test there fails on drift)
 src/limits.ts     the env-tuned DoS caps above
 src/relay.ts      startRelay() — the whole forwarder
@@ -122,7 +122,7 @@ npm run dev          # tsx, from source
 npm run build && npm start
 ```
 
-Point a daemon at it: `GENUI_RELAY_URL=ws://localhost:8080 genui-shell`.
+Point a daemon at it: `MIRAFOLD_RELAY_URL=ws://localhost:8080 mirafold`.
 
 The deeper cross-repo check — a real daemon driving a full remote turn through
 this service — lives in genui-shell: `yarn test:server` runs

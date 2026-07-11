@@ -82,7 +82,7 @@ opaque payload round-trips byte-identically, and a bogus pair id is refused.
 Then the real thing, from the genui-shell repo on your machine:
 
 ```
-GENUI_RELAY_URL=wss://relay.<your-domain> yarn dev
+MIRAFOLD_RELAY_URL=wss://relay.<your-domain> yarn dev
 ```
 
 Scan the QR with your phone **on cellular, wifi off** — that's R.2's
@@ -117,7 +117,7 @@ Two standing constraints from `fly.toml`, do not "optimize" them away:
   is retired to a pointer (or kept synced via `npm run sync:check` in CI —
   decide then).
 - Update genui-shell PLAN R.2: check the box with the date and the domain.
-- The daemon's default relay URL (today `GENUI_RELAY_URL` must be set by
+- The daemon's default relay URL (today `MIRAFOLD_RELAY_URL` must be set by
   hand) gets baked in as the paid-tier default during R.5 entitlement work.
 
 ## Rollback of the whole idea
