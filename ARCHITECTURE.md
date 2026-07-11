@@ -29,8 +29,8 @@ it is deliberately kept small, stateless-per-restart, and vendor-neutral.
 
 ## 2. Vocabulary (define once, used throughout)
 
-- **Daemon** — the genui-shell process on the user's own machine (the "server"
-  half of genui-shell). It runs the actual coding agent. For remote access it
+- **Daemon** — the Mirafold process on the user's own machine (the "server"
+  half of Mirafold). It runs the actual coding agent. For remote access it
   opens an *outbound* WebSocket to the relay instead of listening for inbound
   connections. In relay terms it is the *one* authoritative endpoint per pair.
 - **Viewport** — a browser tab connected *inbound* to the relay (the phone, or
@@ -39,7 +39,7 @@ it is deliberately kept small, stateless-per-restart, and vendor-neutral.
 - **Pair** — one daemon plus all of its viewports, grouped under a **pair id**.
   This is the relay's only real state: a `Map` from pair id to `{ daemon,
   viewports }`.
-- **Pairing code** — a high-entropy secret (128-bit random) that genui-shell
+- **Pairing code** — a high-entropy secret (128-bit random) that Mirafold
   prints/QR-codes when a user starts a remote session. It is the root of trust
   for the end-to-end encryption. **The relay never sees the code.**
 - **Pair id** — the base64url of the first 16 bytes of `SHA-256(pairing code)`
@@ -49,7 +49,7 @@ it is deliberately kept small, stateless-per-restart, and vendor-neutral.
   id does not reveal the code, so the relay can route on it without being able
   to decrypt anything.
 - **Frame** — one message crossing the relay. The application payload inside a
-  frame is the **ciphertext** of a genui-shell wire message; the relay treats
+  frame is the **ciphertext** of a Mirafold wire message; the relay treats
   it as an opaque string.
 - **Envelope** — the thin JSON wrapper the relay and daemon use to say *which
   viewport* a frame belongs to (`{ t, v, p }`: a type, a viewport id, and the
@@ -90,7 +90,7 @@ application bundle (that is a security decision — see §7, "serves no JS").
 WebSocket upgrades are handled separately via the server's `upgrade` event and a
 `WebSocketServer({ noServer: true })`.
 
-**Step 1 — a daemon dials in.** genui-shell opens `wss://<relay>/daemon?pair=<id>`.
+**Step 1 — a daemon dials in.** Mirafold opens `wss://<relay>/daemon?pair=<id>`.
 The `upgrade` handler computes the client IP (`clientIp(req)`, see §5),
 completes the WebSocket handshake, then calls `acceptDaemon(ws, pairId, ip)`:
 - If the pair id is shorter than `MIN_PAIR_ID_LENGTH` (guessable dev junk) or a
@@ -129,7 +129,7 @@ parsed. The relay literally cannot look inside `p` (it's ciphertext; §5).
 - The daemon disconnects → the relay deletes the whole pair and closes every one
   of its viewports with `CLOSE_BAD_CODE`. A viewport with no daemon is useless,
   so it is dropped rather than left hanging.
-- The client side of genui-shell treats *any* close as "reconnect", so these
+- The client side of Mirafold treats *any* close as "reconnect", so these
   codes are informational — a dropped connection simply re-dials. That is also
   why refusals are delivered as a WebSocket close *after* the handshake rather
   than an HTTP rejection before it (see §7, "post-handshake refusal").
@@ -182,7 +182,7 @@ genui-relay is a **standalone, private repo** (the open-core split: genui-shell
 is MIT, the hosted relay is not). But during development the shared service code
 also lives *inside* genui-shell at `relay-service/`, and **that copy is the
 source of truth until first deploy** — because only there can it be tested
-against a real genui-shell daemon (`server/relay-service.itest.ts`, which stands
+against a real Mirafold daemon (`server/relay-service.itest.ts`, which stands
 up the real daemon dialing the real service).
 
 The mechanics:
@@ -241,7 +241,7 @@ source of truth and the in-shell copy to retire to a pointer (or a CI
 - **Refusals happen after the WebSocket handshake, on purpose.** Because the
   `ws` library completes the handshake inside `handleUpgrade` before our gate
   callback runs, a refused connection briefly opens and is then closed with a
-  4xxx code. Every cap behaves this way, and the genui-shell client treats any
+  4xxx code. Every cap behaves this way, and the Mirafold client treats any
   close as "reconnect", so it is consistent and correct — not a bug. If you're
   ever tempted to reject earlier by destroying the socket pre-handshake, know
   you'd be making per-IP/global/pair refusals behave differently from each
