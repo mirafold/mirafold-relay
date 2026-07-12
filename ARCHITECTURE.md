@@ -97,6 +97,12 @@ completes the WebSocket handshake, then calls `acceptDaemon(ws, pairId, ip)`:
   daemon already holds that id, it is refused with close code `CLOSE_CODE_TAKEN`
   (4002). One daemon per pair id, ever — never silently adopted.
 - If we're at the `maxPairs` cap, refused with `CLOSE_OVERLOADED` (4004).
+- **Entitlement gate (the paid-tier lock, R.5).** If `RELAY_ENTITLEMENT_PUBLIC_KEY`
+  is configured, the daemon must present a valid, unexpired signed token on the
+  `mirafold-entitlement` header or it is refused with `CLOSE_UNENTITLED` (4007).
+  The relay verifies the Ed25519 signature + `exp` **offline** (`node:crypto`, no
+  Stripe call, no state) and holds only the *public* key, so it can never mint a
+  token. Unset = no check — today's default, until billing ships.
 - Otherwise it is `track()`ed (counted toward the global and per-IP tallies) and
   stored as `pairs.set(pairId, { daemon: ws, viewports: new Map() })`.
 
@@ -104,6 +110,11 @@ completes the WebSocket handshake, then calls `acceptDaemon(ws, pairId, ip)`:
 After the same handshake + capacity gates, `acceptViewport(ws, pairId, ip)`:
 - Looks up the pair. No daemon holds that id → refused with `CLOSE_BAD_CODE`
   (4003).
+- **Origin gate.** If `RELAY_ALLOWED_ORIGINS` is configured, a viewport whose
+  `Origin` header is not on the list (or absent) is refused with
+  `CLOSE_FORBIDDEN_ORIGIN` (4006). Unset = allow any — today's default, until the
+  static app origin exists. (WebSocket upgrades aren't covered by the browser
+  same-origin rule, so this is an explicit server-side check.)
 - At the `maxViewportsPerPair` cap → refused with `CLOSE_OVERLOADED`.
 - Otherwise assigns a short id `v = randomUUID().slice(0, 8)`, stores it in
   `pair.viewports`, and tells the daemon a viewport arrived:
@@ -283,11 +294,14 @@ names and defaults). The mechanisms, and what each stops:
   phone that never sent a FIN) is `terminate()`d so it can't park a slot
   forever. `0` disables it (the tests disable it to stay deterministic).
 
-Known gap, tracked in the roadmap: there is no application-level per-IP *rate of
-new connections* or origin allowlist yet. The per-IP *concurrent* cap plus
-Fly.io's platform protection sit in front; the audit's follow-ups (an `Origin`
-allowlist once the static app origin exists, and load-testing the cap numbers on
-real hardware) are filed in genui-shell's plan under R.5 and R.6.
+The **viewport origin allowlist** (`RELAY_ALLOWED_ORIGINS`) and the **daemon
+entitlement gate** (`RELAY_ENTITLEMENT_PUBLIC_KEY`) are both built (§4, Steps 1–2)
+but **off by default** — each ships inert until its env value is set (the static
+app origin, and the entitlement signing key, respectively), so production
+behavior is unchanged until R.5 turns them on. Known gap still tracked in the
+roadmap: there is no application-level per-IP *rate of new connections* yet; the
+per-IP *concurrent* cap plus Fly.io's platform protection sit in front, and
+load-testing the cap numbers on real hardware is filed under R.6.
 
 ---
 
@@ -304,8 +318,11 @@ The single source of truth for status and next steps is **genui-shell's
   machine after ~5 minutes), an owned domain plus `fly certs add` (so installed
   daemons point at *our* name, never `fly.dev`), and the cellular-phone
   real-hardware pass.
-- **R.5** adds entitlement/billing and the static app-serving origin — and with
-  it the `Origin` allowlist deferred from the security audit.
+- **R.5** adds entitlement/billing and the static app-serving origin. The relay's
+  two decision-independent halves already landed (2026-07-12): the `Origin`
+  allowlist (`RELAY_ALLOWED_ORIGINS`) and the entitlement gate
+  (`RELAY_ENTITLEMENT_PUBLIC_KEY`), both off by default. Still owed: the Stripe
+  Checkout + token-minting backend, and setting the two env values at deploy.
 - **R.6** load-tests the caps on real hardware.
 
 Do not duplicate that plan here; read it there.
