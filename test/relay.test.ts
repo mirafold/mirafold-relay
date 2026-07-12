@@ -12,6 +12,7 @@ import { startRelay, type Relay, type RelayOptions } from "../src/relay.js";
 import {
   CLOSE_BAD_CODE,
   CLOSE_CODE_TAKEN,
+  CLOSE_FORBIDDEN_ORIGIN,
   CLOSE_OVERLOADED,
   CLOSE_RATE_LIMITED,
   type RelayToDaemon,
@@ -182,6 +183,37 @@ test("per-IP cap keys on the configured trusted header, and frees on close", asy
     await opened(dial(r, "/ws", PAIR, ONE));
   } finally {
     await r.close();
+  }
+});
+
+test("viewport Origin allowlist: unset allows any; set admits only its origins, refuses the rest", async () => {
+  // Unset (default): a viewport from any web origin is admitted — the
+  // pre-allowlist behavior is preserved.
+  {
+    const r = await relay();
+    try {
+      await opened(dial(r, "/daemon", PAIR));
+      await opened(dial(r, "/ws", PAIR, { origin: "https://anything.example" }));
+    } finally {
+      await r.close();
+    }
+  }
+  // Configured: only the listed origin opens a viewport; a wrong origin AND a
+  // missing Origin are both refused. The daemon (no Origin) is never gated.
+  {
+    const ALLOWED = "https://app.mirafold.com";
+    const r = await relay({ allowedViewportOrigins: [ALLOWED] });
+    try {
+      await opened(dial(r, "/daemon", PAIR)); // daemon bypasses the origin gate
+      await opened(dial(r, "/ws", PAIR, { origin: ALLOWED })); // right origin admitted
+      assert.equal(
+        await closeCode(dial(r, "/ws", PAIR, { origin: "https://evil.example" })),
+        CLOSE_FORBIDDEN_ORIGIN,
+      ); // wrong origin refused
+      assert.equal(await closeCode(dial(r, "/ws", PAIR)), CLOSE_FORBIDDEN_ORIGIN); // no Origin refused
+    } finally {
+      await r.close();
+    }
   }
 });
 

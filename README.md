@@ -71,6 +71,7 @@ All values are env-overridable (`src/limits.ts`):
 | `RELAY_RATE_MAX_FRAMES` / `RELAY_RATE_WINDOW_MS` | 480 / 1000 | per-connection frame rate |
 | `RELAY_HEARTBEAT_MS` | 30000 | ws ping interval; a missed ping is reaped |
 | `RELAY_CLIENT_IP_HEADER` | *(unset)* | trusted header carrying the true client IP |
+| `RELAY_ALLOWED_ORIGINS` | *(unset)* | comma-separated web origins allowed to open a viewport; unset = allow any |
 | `PORT` / `HOST` | 8080 / 0.0.0.0 | listen address |
 
 A guessably short pair id, a second daemon on a taken id, an unknown pair id, a
@@ -89,6 +90,16 @@ port an untrusted client can hit without the proxy, because the header is
 spoofable there. NAT'd populations (an office behind one IP) may need the cap
 raised. Raw NAT and platform-level protection sit *in front* of this; it is the
 app's own floor, not the whole defense.
+
+**The viewport origin allowlist (`RELAY_ALLOWED_ORIGINS`)** pins which web
+origins may open a viewport socket — the browser same-origin rule does *not*
+cover WebSockets, so without it a page on any origin can open one. Harmless on
+its own (that page has no pairing code, so it completes no handshake and learns
+nothing), but it is DoS surface the per-source cap only blunts. Set it to the
+static app origin (e.g. `https://app.mirafold.com`) and every other origin — and
+any connection with no `Origin` header — is refused with a clean close
+(`CLOSE_FORBIDDEN_ORIGIN`, 4006). Unset = allow any, the default until that
+static origin exists. Daemon dial-ins carry no `Origin` and are never gated.
 
 ## Repository layout
 
