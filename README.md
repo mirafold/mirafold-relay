@@ -72,6 +72,7 @@ All values are env-overridable (`src/limits.ts`):
 | `RELAY_HEARTBEAT_MS` | 30000 | ws ping interval; a missed ping is reaped |
 | `RELAY_CLIENT_IP_HEADER` | *(unset)* | trusted header carrying the true client IP |
 | `RELAY_ALLOWED_ORIGINS` | *(unset)* | comma-separated web origins allowed to open a viewport; unset = allow any |
+| `RELAY_ENTITLEMENT_PUBLIC_KEY` | *(unset)* | Ed25519 public key (base64 SPKI DER) gating daemon pairings; unset = no entitlement check |
 | `PORT` / `HOST` | 8080 / 0.0.0.0 | listen address |
 
 A guessably short pair id, a second daemon on a taken id, an unknown pair id, a
@@ -100,6 +101,19 @@ static app origin (e.g. `https://app.mirafold.com`) and every other origin — a
 any connection with no `Origin` header — is refused with a clean close
 (`CLOSE_FORBIDDEN_ORIGIN`, 4006). Unset = allow any, the default until that
 static origin exists. Daemon dial-ins carry no `Origin` and are never gated.
+
+**The entitlement gate (`RELAY_ENTITLEMENT_PUBLIC_KEY`)** is the paid-tier lock
+(R.5). Set it to an Ed25519 public key (base64 SPKI DER) and a daemon must
+present a valid, unexpired token on the `mirafold-entitlement` dial-in header to
+open a pairing — a wrong, expired, forged, or missing token is refused with a
+clean close (`CLOSE_UNENTITLED`, 4007). The token is compact
+(`<b64url(payload)>.<b64url(sig)>`, `payload.exp` in unix seconds); the relay
+verifies the signature + expiry **offline** — no Stripe call, no stored state,
+still a dumb E2E-blind forwarder — and holds only the **public** half, so it can
+verify tokens but never mint one (the R.5 billing backend keeps the private
+key). Unset = no entitlement check, the default until billing ships. Viewports
+carry no token: a pairing only exists behind an entitled daemon, so the daemon's
+entitlement covers it.
 
 ## Repository layout
 

@@ -7,6 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { generateKeyPairSync, sign as signMessage, type KeyObject } from "node:crypto";
 import { WebSocket } from "ws";
 import { startRelay, type Relay, type RelayOptions } from "../src/relay.js";
 import {
@@ -15,6 +16,8 @@ import {
   CLOSE_FORBIDDEN_ORIGIN,
   CLOSE_OVERLOADED,
   CLOSE_RATE_LIMITED,
+  CLOSE_UNENTITLED,
+  ENTITLEMENT_HEADER,
   type RelayToDaemon,
 } from "../src/contract.js";
 
@@ -211,6 +214,65 @@ test("viewport Origin allowlist: unset allows any; set admits only its origins, 
         CLOSE_FORBIDDEN_ORIGIN,
       ); // wrong origin refused
       assert.equal(await closeCode(dial(r, "/ws", PAIR)), CLOSE_FORBIDDEN_ORIGIN); // no Origin refused
+    } finally {
+      await r.close();
+    }
+  }
+});
+
+test("entitlement gate (daemons): unset admits any; configured requires a valid, unexpired token", async () => {
+  // Mint a compact "<b64url(payload)>.<b64url(sig)>" token the way the R.5
+  // billing backend will — Ed25519 over the payload segment.
+  const mint = (priv: KeyObject, expSeconds: number): string => {
+    const seg = Buffer.from(JSON.stringify({ exp: expSeconds })).toString("base64url");
+    const sig = signMessage(null, Buffer.from(seg), priv).toString("base64url");
+    return `${seg}.${sig}`;
+  };
+  const ent = (token: string) => ({ [ENTITLEMENT_HEADER]: token });
+  const soon = Math.floor(Date.now() / 1000) + 3600;
+  const past = Math.floor(Date.now() / 1000) - 10;
+
+  // Unset (default): no entitlement check — a daemon dials in freely, with or
+  // without any token. This is today's pre-billing behavior, preserved.
+  {
+    const r = await relay();
+    try {
+      await opened(dial(r, "/daemon", PAIR));
+    } finally {
+      await r.close();
+    }
+  }
+  // Configured: the relay holds the PUBLIC half; only a token signed by the
+  // matching private key and not yet expired opens a pairing.
+  {
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const pubB64 = publicKey.export({ format: "der", type: "spki" }).toString("base64");
+    const { privateKey: otherKey } = generateKeyPairSync("ed25519"); // a different signer
+    const r = await relay({ entitlementPublicKey: pubB64 });
+    try {
+      // A valid, unexpired token is admitted — and its viewport still works
+      // (viewports carry no token; the daemon's entitlement covers the pairing).
+      const daemon = await opened(dial(r, "/daemon", PAIR, ent(mint(privateKey, soon))));
+      const openMsg = nextMessage(daemon);
+      const viewport = await opened(dial(r, "/ws", PAIR));
+      assert.equal((JSON.parse(await openMsg) as RelayToDaemon).t, "open");
+      viewport.close();
+
+      // No token, an expired token, a garbage token, and a token signed by the
+      // wrong key are each refused with the same clean close.
+      assert.equal(await closeCode(dial(r, "/daemon", "no-token-pair-id-22-c")), CLOSE_UNENTITLED);
+      assert.equal(
+        await closeCode(dial(r, "/daemon", "expired-pair-id-22-ch", ent(mint(privateKey, past)))),
+        CLOSE_UNENTITLED,
+      );
+      assert.equal(
+        await closeCode(dial(r, "/daemon", "garbage-pair-id-22-ch", ent("not.a.valid.token"))),
+        CLOSE_UNENTITLED,
+      );
+      assert.equal(
+        await closeCode(dial(r, "/daemon", "wrongkey-pair-id-22-c", ent(mint(otherKey, soon)))),
+        CLOSE_UNENTITLED,
+      );
     } finally {
       await r.close();
     }
