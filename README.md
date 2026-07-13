@@ -70,6 +70,10 @@ All values are env-overridable (`src/limits.ts`):
 | `RELAY_MAX_PAYLOAD_BYTES` | 8000000 | single-frame ceiling |
 | `RELAY_RATE_MAX_FRAMES` / `RELAY_RATE_WINDOW_MS` | 480 / 1000 | per-connection frame rate |
 | `RELAY_HEARTBEAT_MS` | 30000 | ws ping interval; a missed ping is reaped |
+| `RELAY_MAX_SOCKETS` | 2400 | raw TCP sockets accepted at once — the pre-handshake floor; keep ≥ `RELAY_MAX_CONNECTIONS` so the app cap bites first; 0 = unbounded |
+| `RELAY_HEADERS_TIMEOUT_MS` | 15000 | ms to receive the full request headers before a stalled handshake is cut; 0 disables |
+| `RELAY_REQUEST_TIMEOUT_MS` | 20000 | ms to receive the whole request before a stalled handshake is cut; 0 disables |
+| `RELAY_CONNECTION_CHECK_MS` | 5000 | how often stalled handshakes are swept for the two timeouts above; 0 disables both |
 | `RELAY_CLIENT_IP_HEADER` | *(unset)* | trusted header carrying the true client IP |
 | `RELAY_ALLOWED_ORIGINS` | *(unset)* | comma-separated web origins allowed to open a viewport; unset = allow any |
 | `RELAY_ENTITLEMENT_PUBLIC_KEY` | *(unset)* | Ed25519 public key (base64 SPKI DER) gating daemon pairings; unset = no entitlement check |
@@ -114,6 +118,17 @@ verify tokens but never mint one (the R.5 billing backend keeps the private
 key). Unset = no entitlement check, the default until billing ships. Viewports
 carry no token: a pairing only exists behind an entitled daemon, so the daemon's
 entitlement covers it.
+
+**The pre-handshake floor (`RELAY_MAX_SOCKETS`, `RELAY_HEADERS_TIMEOUT_MS`,
+`RELAY_REQUEST_TIMEOUT_MS`)** bounds connections that never finish the WebSocket
+handshake. Every cap above is enforced *after* the upgrade, so a raw TCP or
+half-open HTTP connection that stalls mid-handshake — a slowloris — would
+otherwise be held only by Node's generous defaults. `RELAY_MAX_SOCKETS` caps raw
+accepted sockets; the two timeouts cut a handshake that stalls on its headers or
+the rest of the request, swept every `RELAY_CONNECTION_CHECK_MS`. All three clear
+on a successful upgrade, so a live viewport or daemon socket is never severed by
+them. This matters most on the self-host/VPS path — behind Fly.io the edge
+already bounds concurrency, but a bare `node`-on-a-VPS deploy has no such floor.
 
 ## Repository layout
 

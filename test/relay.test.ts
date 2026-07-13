@@ -11,6 +11,7 @@ import { execFile } from "node:child_process";
 import { generateKeyPairSync, sign as signMessage, type KeyObject } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import net from "node:net";
 import { WebSocket } from "ws";
 import type { Limits } from "../src/limits.js";
 import { startRelay, type Relay, type RelayOptions } from "../src/relay.js";
@@ -292,6 +293,83 @@ test("drops a connection that floods past the frame-rate budget", async () => {
     for (let i = 0; i < 10; i++) viewport.send(`flood-${i}`);
     assert.equal(await dropped, CLOSE_RATE_LIMITED);
   } finally {
+    await r.close();
+  }
+});
+
+test("handshake timeouts bound the handshake only — a live WebSocket is never cut by them", async () => {
+  // The pre-handshake floor must not sever an established, idle session (a
+  // phone waiting between turns). Set both timeouts absurdly short, then idle a
+  // paired connection well past them and prove it still forwards. If Node ever
+  // stopped clearing these timers on upgrade, this test catches it.
+  const r = await relay({ headersTimeoutMs: 200, requestTimeoutMs: 300 });
+  try {
+    const daemon = await opened(dial(r, "/daemon", PAIR));
+    const openMsg = nextMessage(daemon);
+    const viewport = await opened(dial(r, "/ws", PAIR));
+    const { v } = JSON.parse(await openMsg) as { v: string };
+    await new Promise((res) => setTimeout(res, 700)); // idle past both timeouts
+    const arrived = nextMessage(viewport);
+    daemon.send(JSON.stringify({ t: "frame", v, p: "still-forwarding" }));
+    assert.equal(await arrived, "still-forwarding");
+    assert.equal(daemon.readyState, WebSocket.OPEN);
+  } finally {
+    await r.close();
+  }
+});
+
+// Resolves true once the socket closes/errors (server dropped it), false on
+// timeout. Always destroys the socket, so it can never linger and hang close().
+// resume() drains any server response (e.g. the 408 before a graceful FIN): a
+// paused socket buffers that data and never emits "close", which would look
+// like the server failed to reap it.
+function droppedWithin(sock: net.Socket, ms: number): Promise<boolean> {
+  return new Promise<boolean>((res) => {
+    sock.resume();
+    const t = setTimeout(() => res(false), ms);
+    const done = (v: boolean) => {
+      clearTimeout(t);
+      sock.destroy();
+      res(v);
+    };
+    sock.once("close", () => done(true));
+    sock.once("error", () => done(true));
+  });
+}
+
+test("a slowloris that never completes its headers is dropped (pre-handshake floor)", async () => {
+  // Short headers timeout + a tight check interval so the sweep reaps it fast.
+  const r = await relay({ headersTimeoutMs: 100, connectionCheckMs: 30 });
+  try {
+    const sock = net.connect(r.port, "127.0.0.1");
+    await new Promise<void>((res, rej) => {
+      sock.once("connect", () => res());
+      sock.once("error", rej);
+    });
+    // A partial request the server can never finish parsing — the header block
+    // is deliberately left unterminated (no closing blank line). Without the
+    // headers timeout this half-open socket would park a slot indefinitely.
+    sock.write("GET /health HTTP/1.1\r\nHost: relay\r\n");
+    assert.ok(await droppedWithin(sock, 2000), "server closed the stalled handshake");
+  } finally {
+    await r.close();
+  }
+});
+
+test("caps raw TCP sockets past maxSockets (the self-host connection floor)", async () => {
+  const r = await relay({ maxSockets: 1 });
+  const first = net.connect(r.port, "127.0.0.1");
+  try {
+    await new Promise<void>((res, rej) => {
+      first.once("connect", () => res());
+      first.once("error", rej);
+    });
+    // With one raw socket already held and maxSockets = 1, the server accepts
+    // then immediately drops the next one — enforced at accept, no timeout wait.
+    const second = net.connect(r.port, "127.0.0.1");
+    assert.ok(await droppedWithin(second, 2000), "second raw socket refused past maxSockets");
+  } finally {
+    first.destroy();
     await r.close();
   }
 });
