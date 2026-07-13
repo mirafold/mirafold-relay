@@ -7,8 +7,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { generateKeyPairSync, sign as signMessage, type KeyObject } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { WebSocket } from "ws";
+import type { Limits } from "../src/limits.js";
 import { startRelay, type Relay, type RelayOptions } from "../src/relay.js";
 import {
   CLOSE_BAD_CODE,
@@ -315,6 +319,43 @@ test("a daemon leaving closes its viewports; a viewport leaving notifies the dae
   }
 });
 
+test("malformed daemon frames — bad envelopes and non-string payloads — are dropped, never fatal", async () => {
+  const r = await relay();
+  try {
+    const daemon = await opened(dial(r, "/daemon", PAIR));
+    const openMsg = nextMessage(daemon);
+    const viewport = await opened(dial(r, "/ws", PAIR));
+    const { v } = JSON.parse(await openMsg) as { v: string };
+
+    // Two once-fatal crash classes, both an uncaught throw in the daemon
+    // handler that killed the process (dropping every live pairing):
+    //  - a non-envelope that still parses: "null" → reading `.t` off null threw.
+    //  - a well-formed frame whose `p` is not the string the contract requires:
+    //    ws.send(<object|bool|null>) threw. These carry the REAL viewport id so
+    //    they reach the forwarding send — the exact line that once crashed.
+    const junk = [
+      "null",
+      "42",
+      '"str"',
+      "[]",
+      "not json at all",
+      JSON.stringify({ t: "frame", v, p: { nested: 1 } }),
+      JSON.stringify({ t: "frame", v, p: true }),
+      JSON.stringify({ t: "frame", v, p: null }),
+    ];
+    for (const j of junk) daemon.send(j);
+
+    // Same-socket ordering means all the junk was processed before this real
+    // frame — so its arrival proves every junk frame was survived, not fatal.
+    const arrived = nextMessage(viewport);
+    daemon.send(JSON.stringify({ t: "frame", v, p: "still-alive" }));
+    assert.equal(await arrived, "still-alive");
+    assert.equal(daemon.readyState, WebSocket.OPEN);
+  } finally {
+    await r.close();
+  }
+});
+
 test("oversize frames kill the sender, not the relay", async () => {
   const r = await relay({ maxPayloadBytes: 1024 });
   try {
@@ -332,4 +373,34 @@ test("oversize frames kill the sender, not the relay", async () => {
   } finally {
     await r.close();
   }
+});
+
+test('an empty-string env override means "unset", never 0', async () => {
+  // Number("") === 0, so without the guard in limits.ts a set-but-empty var
+  // (a blank .env line, CI interpolating an unset value) configured a relay
+  // that refused every socket while still answering /health. Pin both edges:
+  // empty/whitespace falls back to the default; an explicit "0" is honored.
+  // LIMITS is computed at import time from process.env, hence subprocesses.
+  const readLimits = async (env: Record<string, string>): Promise<Limits> => {
+    const limitsUrl = new URL("../src/limits.ts", import.meta.url).href;
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--eval",
+        `import(${JSON.stringify(limitsUrl)}).then((m) => console.log(JSON.stringify(m.LIMITS)))`,
+      ],
+      { cwd: fileURLToPath(new URL("..", import.meta.url)), env },
+    );
+    return JSON.parse(stdout) as Limits;
+  };
+  const [unset, empty] = await Promise.all([
+    readLimits({ RELAY_MAX_PAIRS: "0" }),
+    readLimits({ RELAY_MAX_PAIRS: "0", RELAY_MAX_CONNECTIONS: "", RELAY_HEARTBEAT_MS: "   " }),
+  ]);
+  assert.equal(empty.maxConnections, unset.maxConnections); // "" ≡ unset
+  assert.equal(empty.heartbeatMs, unset.heartbeatMs); // whitespace ≡ unset
+  assert.equal(unset.maxPairs, 0); // explicit "0" still means 0…
+  assert.equal(empty.maxPairs, 0); // …in both runs
 });
