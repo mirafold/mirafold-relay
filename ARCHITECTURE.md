@@ -293,12 +293,25 @@ names and defaults). The mechanisms, and what each stops:
   socket each interval; one that missed the previous ping (dead TCP, a sleeping
   phone that never sent a FIN) is `terminate()`d so it can't park a slot
   forever. `0` disables it (the tests disable it to stay deterministic).
+- **Pre-handshake floor** (`maxSockets` 2400, `headersTimeoutMs` 15 s,
+  `requestTimeoutMs` 20 s, swept every `connectionCheckMs` 5 s — added
+  2026-07-13, audit finding B3). Every cap above is enforced *after* the
+  WebSocket handshake, so raw TCP / half-open sockets that never upgrade were
+  bounded only by Node's defaults — fine behind Fly's edge, no floor on the
+  self-host/VPS path. `maxSockets` caps raw accepted sockets; the two timeouts
+  cut a slowloris mid-handshake. Two implementation traps, both
+  regression-tested: the timeouts only work as `createServer` **options**
+  (set post-hoc, Node's checker silently ignores them), and they clear on a
+  successful upgrade, so a live WebSocket is never severed by them.
 
-The **viewport origin allowlist** (`RELAY_ALLOWED_ORIGINS`) and the **daemon
-entitlement gate** (`RELAY_ENTITLEMENT_PUBLIC_KEY`) are both built (§4, Steps 1–2)
-but **off by default** — each ships inert until its env value is set (the static
-app origin, and the entitlement signing key, respectively), so production
-behavior is unchanged until R.5 turns them on. Known gap still tracked in the
+The **viewport origin allowlist** (`RELAY_ALLOWED_ORIGINS`) is **ON in
+production** as of 2026-07-13 — set to `https://app.mirafold.com` (the static
+app origin serving the phone bundle) and live-verified: right origin passes
+through to pair validation, wrong or missing origin gets `CLOSE_FORBIDDEN_ORIGIN`
+(4006), daemon dial-ins (no Origin header) are never gated. The **daemon
+entitlement gate** (`RELAY_ENTITLEMENT_PUBLIC_KEY`) remains **off by default** —
+inert until the signing key exists (R.5's billing backend); turning the relay on
+for everyone must land *with* it, never before. Known gap still tracked in the
 roadmap: there is no application-level per-IP *rate of new connections* yet; the
 per-IP *concurrent* cap plus Fly.io's platform protection sit in front, and
 load-testing the cap numbers on real hardware is filed under R.6.
@@ -311,19 +324,22 @@ genui-relay has **no roadmap of its own** — it is one step in genui-shell's pl
 The single source of truth for status and next steps is **genui-shell's
 `PLAN.md`, Phase R**:
 
-- **R.2** is this service. Status as of 2026-07-08: code complete and verified,
-  **deployed** to `genui-relay.fly.dev`, smoke-tested, and a real daemon has
-  driven a full turn through it. Still open before R.2's box closes (all on the
-  genui-shell side): a credit card on the Fly account (the trial stops the
-  machine after ~5 minutes), an owned domain plus `fly certs add` (so installed
-  daemons point at *our* name, never `fly.dev`), and the cellular-phone
-  real-hardware pass.
-- **R.5** adds entitlement/billing and the static app-serving origin. The relay's
-  two decision-independent halves already landed (2026-07-12): the `Origin`
-  allowlist (`RELAY_ALLOWED_ORIGINS`) and the entitlement gate
-  (`RELAY_ENTITLEMENT_PUBLIC_KEY`), both off by default. Still owed: the Stripe
-  Checkout + token-minting backend, and setting the two env values at deploy.
-- **R.6** load-tests the caps on real hardware.
+- **R.2** is this service. Status as of 2026-07-13: code complete and verified,
+  **deployed and live** under our own name at `relay.mirafold.sh` (Fly card
+  added, cert issued, full-protocol smoke passes against the domain), running
+  the 2026-07-12 crash fixes + the pre-handshake floor (machine v3), and the
+  **whole remote path worked on a real phone**: the app bundle serves from
+  `https://app.mirafold.com` (Cloudflare Pages, `mirafold-app`) and a phone
+  drove a session through this relay over wifi. Still open before R.2's box
+  closes: the LTE variant of the phone pass (carrier network + the wifi→LTE
+  mid-turn flip) and baking the daemon's default relay URL (which must land
+  with R.5's entitlement gate ON).
+- **R.5** adds entitlement/billing. The relay's decision-independent halves are
+  done, and the `Origin` allowlist is now set in production (above); the
+  entitlement gate awaits its key. Still owed: the Stripe Checkout +
+  token-minting backend, and `RELAY_ENTITLEMENT_PUBLIC_KEY` at deploy.
+- **R.6** load-tests the caps on real hardware (including a slowloris flood
+  against the new pre-handshake floor).
 
 Do not duplicate that plan here; read it there.
 
