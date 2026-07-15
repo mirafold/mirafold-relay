@@ -188,9 +188,10 @@ only Fly's edge can set `fly-client-ip`, so it's trustworthy there.
 
 ## 6. The two-repo relationship
 
-genui-relay is a **standalone, private repo** (the open-core split: genui-shell
-is MIT, the hosted relay is not), and it is the relay's **single source of
-truth**. (Until the first deploy, a byte-identical dev copy lived inside
+genui-relay is a **standalone, open-source (MIT) repo** — relicensed
+2026-07-15; the earlier open-core split ("genui-shell is MIT, the hosted
+relay is not") was reversed, since what's sold is the hosted instance, not
+the code — and it is the relay's **single source of truth**. (Until the first deploy, a byte-identical dev copy lived inside
 genui-shell at `relay-service/`, held in lockstep by a sync script; that copy
 and the sync were retired 2026-07-15, once the relay was live.)
 

@@ -7,8 +7,13 @@ opening any inbound port: the daemon dials *out* to the relay, the browser
 connects *in*, and the relay shuttles opaque frames between them. It is the
 paid tier's substrate (genui-shell PLAN Phase R).
 
-> **Private repo, by design** — the open-core split: genui-shell is MIT; this
-> hosted service is not. This repo is the relay's **single source of truth**
+> **Open source (MIT)** — relicensed 2026-07-15, reversing the earlier
+> open-core split (genui-shell PLAN Phase K.1). The paid tier sells the
+> *hosted* convenience (`relay.mirafold.sh`), not code secrecy — open relay
+> code lets anyone verify exactly what the relay can and cannot see, which
+> is the point of an E2E-blind design. Self-hosting is expected and fine.
+> The repo itself flips public with the product launch (sequenced by the
+> product's release plan). It is the relay's **single source of truth**
 > (since the first deploy; genui-shell's vendored `relay-service/` dev copy
 > and the sync scripts were retired 2026-07-15). The service is still verified
 > against the REAL daemon from genui-shell: its `server/relay/relay-service.itest.ts`
