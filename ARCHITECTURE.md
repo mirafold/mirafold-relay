@@ -44,7 +44,7 @@ it is deliberately kept small, stateless-per-restart, and vendor-neutral.
   for the end-to-end encryption. **The relay never sees the code.**
 - **Pair id** — the base64url of the first 16 bytes of `SHA-256(pairing code)`
   (a 22-character string; derived by `derivePair()` in genui-shell's
-  `server/relay-crypto.ts`). This is what travels to the relay in the connection
+  `server/relay/relay-crypto.ts`). This is what travels to the relay in the connection
   URL (`?pair=<id>`). Because it's a one-way hash of the code, knowing the pair
   id does not reveal the code, so the relay can route on it without being able
   to decrypt anything.
@@ -65,7 +65,7 @@ Small on purpose — one runtime dependency (`ws`), five source files.
 | File | Responsibility |
 | --- | --- |
 | `src/relay.ts` | The whole forwarder: `startRelay()` builds the HTTP+WS server, the routing tables, the caps, and the heartbeat. Everything of substance is here. |
-| `src/contract.ts` | The routing contract — envelope types, URL paths, close codes, the minimum pair-id length. A **hand-kept mirror** of genui-shell's `server/relay-protocol.ts`; see §6. |
+| `src/contract.ts` | The routing contract — envelope types, URL paths, close codes, the minimum pair-id length. A **hand-kept mirror** of genui-shell's `server/relay/relay-protocol.ts`; see §6. |
 | `src/limits.ts` | The DoS caps as an env-overridable `Limits` object. Pure config, no logic. |
 | `src/main.ts` | The container entrypoint (`node dist/main.js`): reads env, calls `startRelay()`, drains on `SIGTERM`/`SIGINT`, and exits loudly on an uncaught error so the platform restarts it. |
 | `test/relay.test.ts` | Standalone suite (node:test + tsx, raw `ws` clients). Pins routing, every refusal code, and every cap. Runs with no genui-shell checkout. |
@@ -165,7 +165,7 @@ essential before you touch anything near routing or logging.
   the secret that label is derived from.
 - Every `p` payload is AES-GCM ciphertext, encrypted end-to-end between the
   daemon and the viewport using keys derived from the code. The encryption is
-  implemented on *both ends* in genui-shell's `server/relay-crypto.ts` — **not
+  implemented on *both ends* in genui-shell's `server/relay/relay-crypto.ts` — **not
   in this repo at all**. From the relay's side there is nothing to decrypt with;
   it only ever forwards `p`.
 - The relay's logs record connection *metadata* only — pair counts, connection
@@ -196,7 +196,7 @@ and the sync were retired 2026-07-15, once the relay was live.)
 
 What still crosses the repo boundary:
 - **The real-daemon integration test lives in genui-shell.**
-  `server/relay-service.itest.ts` (Tier 2, `yarn test:server`) stands up the
+  `server/relay/relay-service.itest.ts` (Tier 2, `yarn test:server`) stands up the
   real Mirafold daemon dialing the real service — importing `src/relay.ts` and
   `src/contract.ts` from this repo as a **sibling checkout**
   (`../genui-relay/`). Keep the two repos checked out side by side and run that
@@ -204,7 +204,7 @@ What still crosses the repo boundary:
   genui-shell checkout.
 - **`src/contract.ts` is a hand-kept mirror.** A separate repo cannot import
   from genui-shell, so the small, stable routing contract is *duplicated* from
-  genui-shell's `server/relay-protocol.ts`. The two must stay in agreement on
+  genui-shell's `server/relay/relay-protocol.ts`. The two must stay in agreement on
   the parts both ends rely on; a **contract-guard test** in genui-shell's
   `relay-service.itest.ts` fails loudly if they diverge (a silent divergence
   would break pairing in production). If you change the contract, change both

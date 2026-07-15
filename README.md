@@ -11,7 +11,7 @@ paid tier's substrate (genui-shell PLAN Phase R).
 > hosted service is not. This repo is the relay's **single source of truth**
 > (since the first deploy; genui-shell's vendored `relay-service/` dev copy
 > and the sync scripts were retired 2026-07-15). The service is still verified
-> against the REAL daemon from genui-shell: its `server/relay-service.itest.ts`
+> against the REAL daemon from genui-shell: its `server/relay/relay-service.itest.ts`
 > imports `src/` from this repo as a sibling checkout.
 
 ## What it does, and deliberately does not
@@ -20,7 +20,7 @@ paid tier's substrate (genui-shell PLAN Phase R).
   viewports (`/ws?pair=<id>`) by pair id, and forwards frames between them.
 - **Never parses payloads.** The `p` field of every envelope is the
   end-to-end-encrypted WireMsg/ClientMsg (AES-GCM, keyed off the pairing code
-  the relay never sees — see genui-shell `server/relay-crypto.ts`). The relay
+  the relay never sees — see genui-shell `server/relay/relay-crypto.ts`). The relay
   routes on `t`/`v`/`pair` only. It logs no frame contents and stores nothing.
 - **Serves no application bundle.** The only HTTP it answers is `GET /health`.
 - **Enforces no credential policy — that lives in the daemon.** Only API-key or
@@ -134,7 +134,7 @@ already bounds concurrency, but a bare `node`-on-a-VPS deploy has no such floor.
 
 ```
 src/contract.ts   the routing envelope + close codes (mirrors mirafold's
-                  server/relay-protocol.ts; a contract-guard test there fails on drift)
+                  server/relay/relay-protocol.ts; a contract-guard test there fails on drift)
 src/limits.ts     the env-tuned DoS caps above
 src/relay.ts      startRelay() — the whole forwarder
 src/main.ts       container entrypoint; drains on SIGTERM
@@ -165,7 +165,7 @@ Point a daemon at it: `MIRAFOLD_RELAY_URL=ws://localhost:8080 mirafold`.
 
 The deeper cross-repo check — a real daemon driving a full remote turn through
 this service — lives in genui-shell: `yarn test:server` runs
-`server/relay-service.itest.ts` (9 tests) against this code.
+`server/relay/relay-service.itest.ts` (9 tests) against this code.
 
 ## Deploy
 
