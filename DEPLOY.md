@@ -70,14 +70,18 @@ to report the certificate issued (usually minutes after DNS propagates).
 ## 3. Verify — the smoke check
 
 ```
-npm run smoke -- wss://relay.<your-domain>
+npm run smoke -- wss://relay.<your-domain> https://<allowed-app-origin>
 ```
 
-(Before the domain exists, the same check works against the platform name:
-`npm run smoke -- wss://genui-relay.fly.dev`.)
+The second argument is the web origin the relay's `RELAY_ALLOWED_ORIGINS`
+secret admits (the static app origin, e.g. `https://app.mirafold.com`); the
+smoke's viewports present it as their `Origin` header. Omit it only against a
+relay with no origin gate configured. (Before the domain exists, the same
+check works against the platform name: `npm run smoke -- wss://genui-relay.fly.dev …`.)
 
 Green means: health answers over HTTPS, a daemon and viewport pair up, an
-opaque payload round-trips byte-identically, and a bogus pair id is refused.
+opaque payload round-trips byte-identically, a bogus pair id is refused, and —
+with the origin gate on — an origin-less viewport is refused.
 
 Then the real thing, from the genui-shell repo on your machine:
 
@@ -113,9 +117,10 @@ Two standing constraints from `fly.toml`, do not "optimize" them away:
 
 ## 5. After the first deploy
 
-- This repo becomes the source of truth; genui-shell's `relay-service/` copy
-  is retired to a pointer (or kept synced via `npm run sync:check` in CI —
-  decide then).
+- **Done 2026-07-15 (genui-shell PLAN Phase G):** this repo is the source of
+  truth; genui-shell's `relay-service/` copy is a pointer README and the sync
+  scripts are gone. genui-shell's real-daemon itest now imports the relay from
+  this repo as a sibling checkout.
 - Update genui-shell PLAN R.2: check the box with the date and the domain.
 - The daemon's default relay URL (today `MIRAFOLD_RELAY_URL` must be set by
   hand) gets baked in as the paid-tier default during R.5 entitlement work.

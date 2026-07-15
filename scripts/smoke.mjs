@@ -1,10 +1,15 @@
 // Post-deploy smoke check — run this the minute `fly deploy` finishes:
 //
-//   npm run smoke -- wss://relay.your-domain.example
+//   npm run smoke -- wss://relay.your-domain.example https://app.your-domain.example
+//
+// The second argument is the web origin the deployed relay allows
+// (RELAY_ALLOWED_ORIGINS); every viewport connection presents it as its
+// Origin header. Omit it only against a relay with no origin gate configured.
 //
 // Proves, against the LIVE relay: (1) /health answers over HTTPS, (2) a daemon
 // dial-in and a viewport pair up, (3) an opaque payload round-trips both ways
-// byte-identically, (4) a wrong pair id is refused. No genui-shell checkout,
+// byte-identically, (4) a wrong pair id is refused, and — when an origin is
+// given — (5) a viewport with no Origin is refused. No genui-shell checkout,
 // no real daemon — this is the transport-level go/no-go, not the full E2E
 // (that's a real phone driving a session, PLAN R.6).
 
@@ -12,10 +17,16 @@ import { WebSocket } from "ws";
 import { randomBytes } from "node:crypto";
 
 const url = (process.argv[2] ?? process.env.RELAY_URL ?? "").replace(/\/$/, "");
-if (!/^wss?:\/\//.test(url)) {
-  console.error("usage: npm run smoke -- wss://relay.your-domain.example");
+const origin = process.argv[3] ?? process.env.RELAY_ORIGIN ?? "";
+if (!/^wss?:\/\//.test(url) || (origin && !/^https?:\/\//.test(origin))) {
+  console.error(
+    "usage: npm run smoke -- wss://relay.your-domain.example [https://allowed-app-origin.example]",
+  );
   process.exit(2);
 }
+// Browsers stamp Origin on every WebSocket; the relay's viewport gate keys on
+// it, so the smoke's viewports must present the allowed one to be admitted.
+const viewportHeaders = origin ? { headers: { origin } } : {};
 const httpUrl = url.replace(/^ws/, "http");
 const pair = randomBytes(16).toString("base64url"); // 22 chars, like a real pairId
 
@@ -51,7 +62,10 @@ try {
   step("daemon dialed in");
 
   const openMsg = nextMessage(daemon);
-  const viewport = await opened(new WebSocket(`${url}/ws?pair=${pair}`), "viewport");
+  const viewport = await opened(
+    new WebSocket(`${url}/ws?pair=${pair}`, viewportHeaders),
+    "viewport",
+  );
   const open = JSON.parse(await openMsg);
   if (open.t !== "open") throw new Error(`expected open envelope, got ${open.t}`);
   step("viewport paired");
@@ -66,9 +80,19 @@ try {
   if ((await arrived) !== down) throw new Error("downstream payload mangled");
   step("opaque payload round-trips byte-identically");
 
-  const refused = await closeCode(new WebSocket(`${url}/ws?pair=${"0".repeat(22)}`));
+  const refused = await closeCode(
+    new WebSocket(`${url}/ws?pair=${"0".repeat(22)}`, viewportHeaders),
+  );
   if (refused !== 4003) throw new Error(`unknown pair closed with ${refused}, expected 4003`);
   step("unknown pair id refused (4003)");
+
+  if (origin) {
+    const noOrigin = await closeCode(new WebSocket(`${url}/ws?pair=${pair}`));
+    if (noOrigin !== 4006) {
+      throw new Error(`origin-less viewport closed with ${noOrigin}, expected 4006`);
+    }
+    step("viewport without an allowed Origin refused (4006)");
+  }
 
   daemon.close();
   viewport.close();

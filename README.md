@@ -8,11 +8,11 @@ connects *in*, and the relay shuttles opaque frames between them. It is the
 paid tier's substrate (genui-shell PLAN Phase R).
 
 > **Private repo, by design** — the open-core split: genui-shell is MIT; this
-> hosted service is not. Until the first deploy, the dev source of truth for
-> the shared files is `genui-shell/relay-service/`, where the service is
-> verified against the REAL daemon (`server/relay-service.itest.ts`);
-> `npm run sync` pulls those files here and `npm run sync:check` fails on
-> drift. After the first deploy, this repo takes over as the source of truth.
+> hosted service is not. This repo is the relay's **single source of truth**
+> (since the first deploy; genui-shell's vendored `relay-service/` dev copy
+> and the sync scripts were retired 2026-07-15). The service is still verified
+> against the REAL daemon from genui-shell: its `server/relay-service.itest.ts`
+> imports `src/` from this repo as a sibling checkout.
 
 ## What it does, and deliberately does not
 
@@ -133,14 +133,13 @@ already bounds concurrency, but a bare `node`-on-a-VPS deploy has no such floor.
 ## Repository layout
 
 ```
-src/contract.ts   the routing envelope + close codes (VENDORED from mirafold
-                  server/relay-protocol.ts; a sync-guard test there fails on drift)
+src/contract.ts   the routing envelope + close codes (mirrors mirafold's
+                  server/relay-protocol.ts; a contract-guard test there fails on drift)
 src/limits.ts     the env-tuned DoS caps above
 src/relay.ts      startRelay() — the whole forwarder
 src/main.ts       container entrypoint; drains on SIGTERM
 test/             standalone suite (node:test + tsx, raw ws clients)
 scripts/smoke.mjs post-deploy go/no-go against the live relay
-scripts/sync-from-genui-shell.sh   pull/check the shared files (see above)
 Dockerfile        multi-stage, npm ci, runs as the unprivileged node user
 fly.toml          single instance, /health check, auto_stop_machines=false
 ARCHITECTURE.md   ground-up design: vocabulary, frame-routing flows, decisions
@@ -149,8 +148,8 @@ DEPLOY.md         the deploy-day runbook, command by command
 
 New to this service? **[ARCHITECTURE.md](ARCHITECTURE.md)** is the guided tour —
 the vocabulary (daemon, viewport, pair, pairing code), how a frame is routed end
-to end, exactly what the relay can and cannot see, the unusual two-repo sync
-relationship with genui-shell, and the reasoning behind every constraint.
+to end, exactly what the relay can and cannot see, the two-repo relationship
+with genui-shell, and the reasoning behind every constraint.
 
 ## Run and test it
 
@@ -172,4 +171,5 @@ this service — lives in genui-shell: `yarn test:server` runs
 
 See **DEPLOY.md** for the full runbook. Short version: Fly.io single instance,
 TLS terminated by the platform, behind a domain we own (the indirection that
-keeps the host replaceable), then `npm run smoke -- wss://relay.<domain>`.
+keeps the host replaceable), then
+`npm run smoke -- wss://relay.<domain> https://<allowed-app-origin>`.

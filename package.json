@@ -15,9 +15,7 @@
     "dev": "node --import tsx src/main.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
-    "smoke": "node scripts/smoke.mjs",
-    "sync": "scripts/sync-from-genui-shell.sh",
-    "sync:check": "scripts/sync-from-genui-shell.sh --check"
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "ws": "^8.21.0"

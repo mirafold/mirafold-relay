@@ -65,12 +65,11 @@ Small on purpose — one runtime dependency (`ws`), five source files.
 | File | Responsibility |
 | --- | --- |
 | `src/relay.ts` | The whole forwarder: `startRelay()` builds the HTTP+WS server, the routing tables, the caps, and the heartbeat. Everything of substance is here. |
-| `src/contract.ts` | The routing contract — envelope types, URL paths, close codes, the minimum pair-id length. **Vendored** (a hand-kept copy) from genui-shell's `server/relay-protocol.ts`; see §6. |
+| `src/contract.ts` | The routing contract — envelope types, URL paths, close codes, the minimum pair-id length. A **hand-kept mirror** of genui-shell's `server/relay-protocol.ts`; see §6. |
 | `src/limits.ts` | The DoS caps as an env-overridable `Limits` object. Pure config, no logic. |
 | `src/main.ts` | The container entrypoint (`node dist/main.js`): reads env, calls `startRelay()`, drains on `SIGTERM`/`SIGINT`, and exits loudly on an uncaught error so the platform restarts it. |
 | `test/relay.test.ts` | Standalone suite (node:test + tsx, raw `ws` clients). Pins routing, every refusal code, and every cap. Runs with no genui-shell checkout. |
 | `scripts/smoke.mjs` | Post-deploy go/no-go against a *live* relay URL. Plain Node, zero deps beyond `ws`. |
-| `scripts/sync-from-genui-shell.sh` | Pulls the shared files from genui-shell's `relay-service/` (the dev source of truth) or `--check`s for drift. See §6. |
 | `Dockerfile` / `fly.toml` | Deploy: multi-stage build, unprivileged runtime user; single Fly.io instance with a `/health` check. |
 
 The public API of the module is exactly three things exported from `relay.ts`:
@@ -187,34 +186,29 @@ only Fly's edge can set `fly-client-ip`, so it's trustworthy there.
 
 ---
 
-## 6. The two-repo relationship (this is unusual — read it)
+## 6. The two-repo relationship
 
 genui-relay is a **standalone, private repo** (the open-core split: genui-shell
-is MIT, the hosted relay is not). But during development the shared service code
-also lives *inside* genui-shell at `relay-service/`, and **that copy is the
-source of truth until first deploy** — because only there can it be tested
-against a real Mirafold daemon (`server/relay-service.itest.ts`, which stands
-up the real daemon dialing the real service).
+is MIT, the hosted relay is not), and it is the relay's **single source of
+truth**. (Until the first deploy, a byte-identical dev copy lived inside
+genui-shell at `relay-service/`, held in lockstep by a sync script; that copy
+and the sync were retired 2026-07-15, once the relay was live.)
 
-The mechanics:
-- **Synced from genui-shell** (do not hand-edit here; edit in
-  `genui-shell/relay-service/` and run `npm run sync`): `src/*.ts`,
-  `tsconfig.json`, `fly.toml`, `.dockerignore`. `npm run sync:check` fails on
-  drift.
-- **Owned by this repo** (never synced): `package.json`, `package-lock.json`,
-  `Dockerfile`, `.gitignore`, `README.md`, `ARCHITECTURE.md`, `DEPLOY.md`,
-  `test/`, `scripts/`.
-- **`src/contract.ts` is "vendored."** A separate repo cannot import from
-  genui-shell, so the small, stable routing contract is *duplicated* from
-  genui-shell's `server/relay-protocol.ts`. The two must stay byte-identical for
-  the parts that both ends rely on; a **sync-guard test** in genui-shell's
+What still crosses the repo boundary:
+- **The real-daemon integration test lives in genui-shell.**
+  `server/relay-service.itest.ts` (Tier 2, `yarn test:server`) stands up the
+  real Mirafold daemon dialing the real service — importing `src/relay.ts` and
+  `src/contract.ts` from this repo as a **sibling checkout**
+  (`../genui-relay/`). Keep the two repos checked out side by side and run that
+  suite after any relay change; the standalone `test/` suite here needs no
+  genui-shell checkout.
+- **`src/contract.ts` is a hand-kept mirror.** A separate repo cannot import
+  from genui-shell, so the small, stable routing contract is *duplicated* from
+  genui-shell's `server/relay-protocol.ts`. The two must stay in agreement on
+  the parts both ends rely on; a **contract-guard test** in genui-shell's
   `relay-service.itest.ts` fails loudly if they diverge (a silent divergence
-  would break pairing in production). If you change the contract, change it in
-  genui-shell first, then sync.
-
-After the first production deploy, the plan is for this repo to become the
-source of truth and the in-shell copy to retire to a pointer (or a CI
-`sync:check`). Until then: **genui-shell leads, genui-relay follows.**
+  would break pairing in production). If you change the contract, change both
+  repos in the same sitting and let that test prove the match.
 
 ---
 
