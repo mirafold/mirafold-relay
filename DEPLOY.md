@@ -118,7 +118,8 @@ Two standing constraints from `fly.toml`, do not "optimize" them away:
 ## 5. After the first deploy
 
 - **Done 2026-07-15 (genui-shell PLAN Phase G):** this repo is the source of
-  truth; genui-shell's `relay-service/` copy is a pointer README and the sync
+  truth; genui-shell's `relay-service/` copy was reduced to a pointer README
+  (removed entirely later that day, genui-shell H2.3) and the sync
   scripts are gone. genui-shell's real-daemon itest now imports the relay from
   this repo as a sibling checkout.
 - Update genui-shell PLAN R.2: check the box with the date and the domain.
