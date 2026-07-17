@@ -12,7 +12,7 @@ file is the "how and why it works" underneath both.
 ## 1. What this service is, in one paragraph
 
 genui-relay is a **dumb, end-to-end-blind WebSocket forwarder**. Its entire job
-is to let a [genui-shell](https://github.com/kserrec/genui-shell) daemon running
+is to let a [genui-shell](https://github.com/mirafold/mirafold) daemon running
 on someone's laptop be reached from their phone (or a second device) **without
 that laptop opening any inbound network port**. The laptop dials *out* to the
 relay; the phone connects *in* to the relay; the relay matches the two and

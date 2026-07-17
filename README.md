@@ -1,6 +1,6 @@
 # genui-relay
 
-The hosted relay for [genui-shell](https://github.com/kserrec/genui-shell) — a
+The hosted relay for [genui-shell](https://github.com/mirafold/mirafold) — a
 **dumb, end-to-end-blind WebSocket forwarder**. It lets a genui-shell daemon
 running on your machine be reached from a phone or a second device without
 opening any inbound port: the daemon dials *out* to the relay, the browser
