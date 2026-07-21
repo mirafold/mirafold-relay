@@ -15,6 +15,13 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege for the auto-provisioned GITHUB_TOKEN: this job only reads the
+# code and runs tests. Read-only matters most once the repo is public, when a
+# fork PR runs on the runner — a malicious dependency install-script then can't
+# use the token to write to the repo.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
