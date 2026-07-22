@@ -1,0 +1,41 @@
+name: CI
+
+# Type-checks and runs the relay's unit suite on every push to main and every
+# pull request. The relay is a pure WebSocket forwarder — no browser, no real
+# model, no secrets — so a single fast job covers it. npm + Node (engines say
+# >= 20.12; pinned to 20 here, the floor the code targets).
+#
+# The contract-guard against genui-shell's routing protocol lives in the SHELL
+# repo's sibling itest (server/relay/relay-service.itest.ts), which imports this
+# package from ../genui-relay — that cross-repo proof runs in the shell's CI,
+# not here. This job pins the relay's own caps and refusal codes.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege for the auto-provisioned GITHUB_TOKEN: this job only reads the
+# code and runs tests. Read-only matters most once the repo is public, when a
+# fork PR runs on the runner — a malicious dependency install-script then can't
+# use the token to write to the repo.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: typecheck + unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
