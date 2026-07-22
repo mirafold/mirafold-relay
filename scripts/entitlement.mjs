@@ -15,12 +15,15 @@
 //     read from the environment, never argv, so it can't land in shell history.
 //     TTL forms: 90m, 48h, 7d, or bare seconds. Default 48h.
 //
-//   RELAY_ENTITLEMENT_PUBLIC_KEY=… node scripts/entitlement.mjs verify <token>
+//   … mint --ttl 48h | RELAY_ENTITLEMENT_PUBLIC_KEY=… node scripts/entitlement.mjs verify
 //     Check a token the way the deployed relay does (signature + expiry) and
-//     print its payload. Note the relay ALSO caps how far out `exp` may lie
-//     (RELAY_ENTITLEMENT_MAX_TTL_SECONDS, default 7d) — a hand-minted token
-//     with a longer TTL will verify here but be refused there.
+//     print its payload. The token arrives on STDIN (pipe it), never argv —
+//     same reason mint reads the key from env: a live credential must not
+//     land in shell history. Note the relay ALSO caps how far out `exp` may
+//     lie (RELAY_ENTITLEMENT_MAX_TTL_SECONDS, default 7d) — a hand-minted
+//     token with a longer TTL will verify here but be refused there.
 
+import { readFileSync } from "node:fs";
 import {
   createPrivateKey,
   createPublicKey,
@@ -66,8 +69,9 @@ if (cmd === "generate") {
 } else if (cmd === "verify") {
   const b64 = process.env.RELAY_ENTITLEMENT_PUBLIC_KEY;
   if (!b64) fail("set RELAY_ENTITLEMENT_PUBLIC_KEY in the environment (base64 SPKI DER)");
-  const token = rest[0];
-  if (!token) fail("usage: verify <token>");
+  if (rest[0]) fail("tokens are credentials — pipe on stdin (… mint | … verify), never argv");
+  const token = readFileSync(0, "utf8").trim();
+  if (!token) fail("pipe the token on stdin, e.g.:  … mint --ttl 48h | … verify");
   const key = createPublicKey({ key: Buffer.from(b64, "base64"), format: "der", type: "spki" });
   const dot = token.indexOf(".");
   if (dot <= 0 || dot === token.length - 1) fail("malformed token (no '.' separator)");
