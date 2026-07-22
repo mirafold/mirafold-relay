@@ -1,0 +1,51 @@
+name: Deploy
+
+# Manual-dispatch production deploy (Kyle's call, 2026-07-22): deployment is
+# gated on a human clicking "Run workflow" and choosing the ref to deploy —
+# nothing here runs on push, merge, or schedule. The branch/tag picker in the
+# dispatch UI is the "which branch goes to prod" choice.
+#
+# INERT UNTIL CONFIGURED: this job needs a FLY_API_TOKEN repo secret (create
+# one with `fly tokens create deploy -a genui-relay` after `fly auth login`,
+# then add it under Settings → Secrets and variables → Actions). Without the
+# secret the job fails immediately at auth and deploys nothing.
+#
+# Scope: REPEAT deploys of an existing app only. Deploy day's one-time steps —
+# `fly apps create`, certs, DNS, the smoke check — stay manual and live in
+# DEPLOY.md. flyctl is installed from Fly's official installer rather than a
+# third-party action, so no unpinned action ever sees the token.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never two deploys at once; a second dispatch waits (no cancel — an
+# interrupted `fly deploy` is worse than a queued one).
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: fly deploy
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install flyctl
+        run: |
+          curl -L https://fly.io/install.sh | sh
+          echo "$HOME/.fly/bin" >> "$GITHUB_PATH"
+      # --ha=false: pair affinity needs exactly ONE machine (DEPLOY.md §1);
+      # harmless on an existing single-machine app, load-bearing if the app
+      # was ever recreated.
+      - name: Deploy
+        run: flyctl deploy --remote-only --ha=false
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      - name: Status
+        run: flyctl status
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

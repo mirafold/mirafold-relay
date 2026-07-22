@@ -99,6 +99,14 @@ can't log payloads (it never parses `p`), but deploy day is when we look.
 
 ## 4. Day-2 operations
 
+**Repeat deploys can run from GitHub instead of a terminal:** the `Deploy`
+workflow (`.github/workflows/deploy.yml`) is manual-dispatch only — Actions →
+Deploy → "Run workflow", pick the ref to ship. It needs a `FLY_API_TOKEN`
+repo secret (`fly tokens create deploy -a genui-relay`, then Settings →
+Secrets and variables → Actions); until that secret exists it fails at auth
+and deploys nothing. Everything in §§0–3 (app create, certs, DNS, smoke)
+stays manual — the workflow only does the `fly deploy` half.
+
 | task | command |
 | --- | --- |
 | tail logs | `fly logs` |
