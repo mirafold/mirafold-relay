@@ -119,7 +119,7 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
   const entitled = (req: IncomingMessage): boolean => {
     if (!entitlementKey) return true;
     const h = req.headers[ENTITLEMENT_HEADER];
-    return entitlementValid(Array.isArray(h) ? h[0] : h, entitlementKey);
+    return entitlementValid(Array.isArray(h) ? h[0] : h, entitlementKey, cfg.entitlementMaxTtlSeconds);
   };
 
   // Pre-handshake flood floor. Every cap below is enforced AFTER the WebSocket
@@ -378,9 +378,16 @@ function stripUndefined<T extends object>(o: T): Partial<T> {
 // Verifies a compact entitlement token, "<b64url(payloadJSON)>.<b64url(sig)>":
 // an Ed25519 signature (by the key that pairs with entitlementKey) over the
 // payload segment's bytes, and a payload `exp` (unix seconds) still in the
-// future. Offline and side-effect-free — the relay stores nothing and calls no
-// one. Any malformed, mis-signed, or expired token returns false.
-function entitlementValid(token: string | undefined, key: KeyObject): boolean {
+// future — but not further out than maxTtlSeconds (audit B2: the minter issues
+// 48h tokens, so a far-future `exp` means a buggy or compromised minter even
+// when the signature verifies; 0 disables the ceiling). Offline and
+// side-effect-free — the relay stores nothing and calls no one. Any malformed,
+// mis-signed, expired, or implausibly long-lived token returns false.
+function entitlementValid(
+  token: string | undefined,
+  key: KeyObject,
+  maxTtlSeconds: number,
+): boolean {
   if (!token) return false;
   const dot = token.indexOf(".");
   if (dot <= 0 || dot === token.length - 1) return false;
@@ -391,7 +398,8 @@ function entitlementValid(token: string | undefined, key: KeyObject): boolean {
     const payload = JSON.parse(Buffer.from(payloadSeg, "base64url").toString("utf8")) as {
       exp?: unknown;
     };
-    return typeof payload.exp === "number" && payload.exp * 1000 > Date.now();
+    if (typeof payload.exp !== "number" || payload.exp * 1000 <= Date.now()) return false;
+    return maxTtlSeconds === 0 || payload.exp * 1000 <= Date.now() + maxTtlSeconds * 1000;
   } catch {
     return false;
   }

@@ -39,8 +39,8 @@ export const CLOSE_UNENTITLED = 4007; // daemon dial-in without a valid entitlem
 export const CLOSE_RATE_LIMITED = 4008; // a connection exceeded its frame rate
 
 // Request header a daemon presents its entitlement token on when dialing in
-// (the paid-tier gate, R.5). Relay-only for now; when the daemon side is wired
-// this joins the shared contract with server/relay-protocol.ts.
+// (the paid-tier gate, R.5). The daemon side sends it since 2026-07-22, so it
+// is part of the shared contract with server/relay-protocol.ts.
 export const ENTITLEMENT_HEADER = "mirafold-entitlement";
 
 // The shared subset the sync-guard test checks against server/relay-protocol.ts.
@@ -50,6 +50,7 @@ export const SHARED_CONTRACT = {
   PAIR_PARAM,
   CLOSE_CODE_TAKEN,
   CLOSE_BAD_CODE,
+  ENTITLEMENT_HEADER,
 } as const;
 
 // A pair id shorter than this is refused outright (guessable dev values must

@@ -282,6 +282,32 @@ test("entitlement gate (daemons): unset admits any; configured requires a valid,
       await r.close();
     }
   }
+  // Max-TTL backstop (audit B2): a correctly SIGNED token whose `exp` lies
+  // implausibly far out — the minter issues 48h tokens — is refused too; a
+  // compromised or buggy minter must not be able to grant effectively
+  // permanent access. 0 disables the ceiling.
+  {
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const pubB64 = publicKey.export({ format: "der", type: "spki" }).toString("base64");
+    const farOut = Math.floor(Date.now() / 1000) + 30 * 86_400; // 30 days
+    const underCap = Math.floor(Date.now() / 1000) + 6 * 86_400; // inside the 7d default
+    const r = await relay({ entitlementPublicKey: pubB64 }); // default cap: 7 days
+    try {
+      assert.equal(
+        await closeCode(dial(r, "/daemon", "overcap-pair-id-22-c", ent(mint(privateKey, farOut)))),
+        CLOSE_UNENTITLED,
+      );
+      await opened(dial(r, "/daemon", PAIR, ent(mint(privateKey, underCap))));
+    } finally {
+      await r.close();
+    }
+    const rOff = await relay({ entitlementPublicKey: pubB64, entitlementMaxTtlSeconds: 0 });
+    try {
+      await opened(dial(rOff, "/daemon", PAIR, ent(mint(privateKey, farOut))));
+    } finally {
+      await rOff.close();
+    }
+  }
 });
 
 test("drops a connection that floods past the frame-rate budget", async () => {

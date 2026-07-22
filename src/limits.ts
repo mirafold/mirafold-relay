@@ -39,6 +39,12 @@ export type Limits = {
    * default tighter than Node's 30s so "15s" means roughly that. 0 disables the
    * sweep entirely — which also disables both timeouts above. */
   connectionCheckMs: number;
+  /** Ceiling on how far in the future an entitlement token's `exp` may lie
+   * (2026-07-12 audit, B2): the minting backend issues 48h tokens, so an `exp`
+   * years out can only mean a buggy or compromised minter — reject it even
+   * though the signature verifies. Only meaningful when the entitlement gate
+   * (RELAY_ENTITLEMENT_PUBLIC_KEY) is on. 0 disables the ceiling. */
+  entitlementMaxTtlSeconds: number;
 };
 
 const num = (name: string, fallback: number): number => {
@@ -63,4 +69,5 @@ export const LIMITS: Limits = {
   headersTimeoutMs: num("RELAY_HEADERS_TIMEOUT_MS", 15_000),
   requestTimeoutMs: num("RELAY_REQUEST_TIMEOUT_MS", 20_000),
   connectionCheckMs: num("RELAY_CONNECTION_CHECK_MS", 5_000),
+  entitlementMaxTtlSeconds: num("RELAY_ENTITLEMENT_MAX_TTL_SECONDS", 604_800), // 7 days
 };

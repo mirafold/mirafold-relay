@@ -82,6 +82,7 @@ All values are env-overridable (`src/limits.ts`):
 | `RELAY_CLIENT_IP_HEADER` | *(unset)* | trusted header carrying the true client IP |
 | `RELAY_ALLOWED_ORIGINS` | *(unset)* | comma-separated web origins allowed to open a viewport; unset = allow any |
 | `RELAY_ENTITLEMENT_PUBLIC_KEY` | *(unset)* | Ed25519 public key (base64 SPKI DER) gating daemon pairings; unset = no entitlement check |
+| `RELAY_ENTITLEMENT_MAX_TTL_SECONDS` | 604800 (7d) | ceiling on how far out a token's `exp` may lie — a signed but implausibly long-lived token (the minter issues 48h) is refused; 0 disables |
 | `PORT` / `HOST` | 8080 / 0.0.0.0 | listen address |
 
 A guessably short pair id, a second daemon on a taken id, an unknown pair id, a
@@ -122,7 +123,11 @@ still a dumb E2E-blind forwarder — and holds only the **public** half, so it c
 verify tokens but never mint one (the R.5 billing backend keeps the private
 key). Unset = no entitlement check, the default until billing ships. Viewports
 carry no token: a pairing only exists behind an entitled daemon, so the daemon's
-entitlement covers it.
+entitlement covers it. A signed token whose `exp` lies further out than
+`RELAY_ENTITLEMENT_MAX_TTL_SECONDS` is refused too — the backstop against a
+buggy or compromised minter granting effectively permanent access. Keypair
+generation and hand-minting (comped beta access, ops smoke tests) live in
+`scripts/entitlement.mjs`.
 
 **The pre-handshake floor (`RELAY_MAX_SOCKETS`, `RELAY_HEADERS_TIMEOUT_MS`,
 `RELAY_REQUEST_TIMEOUT_MS`)** bounds connections that never finish the WebSocket
