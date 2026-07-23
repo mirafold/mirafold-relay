@@ -275,6 +275,17 @@ names and defaults). The mechanisms, and what each stops:
   limit can't stop that (the attack is many idle connections, not one noisy
   one), which is exactly why this cap exists. It keys on the trusted client IP
   (§5). `0` disables it. (Added from the 2026-07-08 security audit, finding #1.)
+- **Per-IP connection-*rate* cap** (`maxNewConnectionsPerIp`, off by default;
+  window `newConnectionWindowMs`, 60 s) — the complement to the concurrent cap
+  above: a source that opens and closes connections in a tight loop never
+  raises its concurrent count, so that cap never fires, yet the churn still
+  costs handshake work. This bounds new connections per source per window,
+  refusing the overflow with `CLOSE_OVERLOADED`. It ships **off** because the
+  client re-dials on every close (wifi↔LTE flips, daemon backoff), so a value
+  set too low would refuse legitimate reconnects — it is enabled per-deploy
+  with a generous value once real reconnect rates are known, like the origin
+  and entitlement gates. Windows are swept in the heartbeat so the per-IP map
+  holds only recently-seen sources.
 - **Per-connection frame-rate limit** (`rateMaxFrames`/`rateWindowMs`, 480 per
   second) — a flooder loses its own connection (`CLOSE_RATE_LIMITED`, 4008), not
   the relay's CPU. Implemented as a sliding window in `withinRate()`.
@@ -306,10 +317,11 @@ through to pair validation, wrong or missing origin gets `CLOSE_FORBIDDEN_ORIGIN
 (4006), daemon dial-ins (no Origin header) are never gated. The **daemon
 entitlement gate** (`RELAY_ENTITLEMENT_PUBLIC_KEY`) remains **off by default** —
 inert until the signing key exists (R.5's billing backend); turning the relay on
-for everyone must land *with* it, never before. Known gap still tracked in the
-roadmap: there is no application-level per-IP *rate of new connections* yet; the
-per-IP *concurrent* cap plus Fly.io's platform protection sit in front, and
-load-testing the cap numbers on real hardware is filed under R.6.
+for everyone must land *with* it, never before. The application-level per-IP
+*rate of new connections* now exists (`maxNewConnectionsPerIp`, above) but ships
+off by default; picking a production value that bounds churn without refusing
+legitimate reconnects is the tuning step, alongside the concurrent-cap numbers
+load-tested on real hardware under R.6.
 
 ---
 

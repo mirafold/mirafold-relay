@@ -84,5 +84,5 @@ if (cmd === "generate") {
   console.log(live ? `valid — expires ${new Date(payload.exp * 1000).toISOString()}` : "signature ok but EXPIRED");
   if (!live) process.exit(1);
 } else {
-  fail("usage: entitlement.mjs generate | mint [--ttl 48h] | verify <token>");
+  fail("usage: entitlement.mjs generate | mint [--ttl 48h] | verify  (token piped on stdin)");
 }

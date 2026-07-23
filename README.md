@@ -63,6 +63,15 @@ the user sees as "wrong pairing code." There is nothing to negotiate here.
 
 ## Hardening (the DoS posture)
 
+> **Deploying this yourself? Two env vars decide who can use your relay, and
+> both default to _open_.** With neither set, any daemon can pair (no
+> `RELAY_ENTITLEMENT_PUBLIC_KEY`) and a viewport from any web origin is admitted
+> (no `RELAY_ALLOWED_ORIGINS`). That is the correct default for local dev, but a
+> relay put on the public internet without at least the origin allowlist is a
+> free forwarder for anyone who finds it. Set `RELAY_ALLOWED_ORIGINS` to the web
+> origin that serves your phone app; add `RELAY_ENTITLEMENT_PUBLIC_KEY` if you
+> want to gate pairing on a signed token. Both are detailed below.
+
 Everything is bounded and refused rather than degraded, mirroring the daemon.
 All values are env-overridable (`src/limits.ts`):
 
@@ -70,6 +79,8 @@ All values are env-overridable (`src/limits.ts`):
 | --- | --- | --- |
 | `RELAY_MAX_CONNECTIONS` | 2000 | hard ceiling on live sockets |
 | `RELAY_MAX_CONNECTIONS_PER_IP` | 64 | live sockets one source IP may hold (0 disables) |
+| `RELAY_MAX_NEW_CONNECTIONS_PER_IP` | 0 (off) | new connections one source IP may open per window before the rest are refused — bounds open/close churn the concurrent cap can't see; off by default (see note below) |
+| `RELAY_NEW_CONNECTION_WINDOW_MS` | 60000 | sliding window for the cap above (only meaningful when it's > 0) |
 | `RELAY_MAX_PAIRS` | 1000 | distinct daemons at once |
 | `RELAY_MAX_VIEWPORTS_PER_PAIR` | 8 | browser viewports per pair |
 | `RELAY_MAX_PAYLOAD_BYTES` | 8000000 | single-frame ceiling |
@@ -101,6 +112,21 @@ port an untrusted client can hit without the proxy, because the header is
 spoofable there. NAT'd populations (an office behind one IP) may need the cap
 raised. Raw NAT and platform-level protection sit *in front* of this; it is the
 app's own floor, not the whole defense.
+
+**The per-source connection-rate cap (`RELAY_MAX_NEW_CONNECTIONS_PER_IP`)**
+covers the blind spot the concurrent cap above has: a source that opens and
+immediately closes connections in a tight loop never accumulates a high
+concurrent count, so the concurrent cap never fires, yet the churn still costs
+the relay handshake work. This bounds *new connections per source per window*
+(`RELAY_NEW_CONNECTION_WINDOW_MS`, default 60 s); a source over budget is
+refused with a clean `CLOSE_OVERLOADED`. It ships **off by default** (`0`)
+because the client re-dials on every disconnect (a phone flipping wifi↔LTE, a
+daemon reconnecting on backoff), so a value set too low would refuse legitimate
+reconnects — a self-inflicted outage. Enable it per-deploy with a generous
+value once you've seen your real reconnect rates, the same way the origin and
+entitlement gates are turned on deliberately rather than by default. Behind
+Fly.io, set `RELAY_CLIENT_IP_HEADER` (already set) so it keys on the real
+client IP, not the shared proxy address.
 
 **The viewport origin allowlist (`RELAY_ALLOWED_ORIGINS`)** pins which web
 origins may open a viewport socket — the browser same-origin rule does *not*

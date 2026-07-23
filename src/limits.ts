@@ -9,6 +9,17 @@ export type Limits = {
   /** Live sockets one source IP may hold — stops one host eating the global
    * budget or squatting every pair slot. 0 disables the per-IP gate. */
   maxConnectionsPerIp: number;
+  /** New connections one source IP may open per newConnectionWindowMs before
+   * the rest are refused. The per-IP CONCURRENT cap can't see open/close churn
+   * (each connection is short-lived, so the concurrent count never climbs);
+   * this bounds that. 0 disables — the default, since the reconnect-heavy
+   * client (any close is a re-dial; wifi↔LTE flips) makes a too-tight value a
+   * self-inflicted outage, so it ships off and is enabled per-deploy after
+   * tuning, like the origin/entitlement gates. */
+  maxNewConnectionsPerIp: number;
+  /** Sliding window for maxNewConnectionsPerIp. Only meaningful when that cap
+   * is > 0. */
+  newConnectionWindowMs: number;
   /** Distinct daemons (pairs) at once. */
   maxPairs: number;
   /** Browser viewports per pair — independent of the daemon's own cap. */
@@ -59,6 +70,8 @@ const num = (name: string, fallback: number): number => {
 export const LIMITS: Limits = {
   maxConnections: num("RELAY_MAX_CONNECTIONS", 2_000),
   maxConnectionsPerIp: num("RELAY_MAX_CONNECTIONS_PER_IP", 64),
+  maxNewConnectionsPerIp: num("RELAY_MAX_NEW_CONNECTIONS_PER_IP", 0),
+  newConnectionWindowMs: num("RELAY_NEW_CONNECTION_WINDOW_MS", 60_000),
   maxPairs: num("RELAY_MAX_PAIRS", 1_000),
   maxViewportsPerPair: num("RELAY_MAX_VIEWPORTS_PER_PAIR", 8),
   maxPayloadBytes: num("RELAY_MAX_PAYLOAD_BYTES", 8_000_000),

@@ -4,6 +4,20 @@ The code half is done and verified; this file is the exact sequence for deploy
 day. Prerequisites you do once, in your own terminal — then the deploy itself
 is about six commands.
 
+> **Access defaults to open — set the gating secrets before this faces real
+> users.** A relay with none of the access-gating env vars set will pair *any*
+> daemon and admit a viewport from *any* web origin (correct for local dev,
+> wrong for the public internet). On the hosted deploy these are Fly secrets;
+> a self-hoster sets the same env vars. The two that matter:
+> - `RELAY_ALLOWED_ORIGINS` — the web origin serving the phone app (e.g.
+>   `https://app.mirafold.com`). Unset admits any origin.
+> - `RELAY_ENTITLEMENT_PUBLIC_KEY` — gate pairing on a signed token (the
+>   paid-tier lock). Unset means no token is required.
+>
+> Optional churn brake: `RELAY_MAX_NEW_CONNECTIONS_PER_IP` (off by default —
+> see the README; enable with a generous value once real reconnect rates are
+> known, never so tight it refuses legitimate wifi↔LTE reconnects).
+
 ## 0. One-time prerequisites (Kyle)
 
 1. **Fly.io account** — sign up at https://fly.io (free to create; this app

@@ -1,7 +1,7 @@
 // Standalone verification of the forwarder — no genui-shell checkout needed.
 // These tests speak the routing contract directly with raw ws clients; the
 // cross-repo proof that a REAL daemon drives a full turn through this service
-// lives in genui-shell (server/relay-service.itest.ts, Tier 2) and stays the
+// lives in genui-shell (server/relay/relay-service.itest.ts, Tier 2) and stays the
 // deeper check. Here we pin what the relay itself promises: routing, refusal
 // codes, and every DoS cap.
 
@@ -55,6 +55,16 @@ function closeCode(ws: WebSocket): Promise<number> {
 
 function nextMessage(ws: WebSocket): Promise<string> {
   return new Promise((resolve) => ws.once("message", (d) => resolve(String(d))));
+}
+
+/** The common preamble: a daemon and one viewport paired on PAIR, resolved
+ * once the daemon has been told the viewport's id. */
+async function paired(r: Relay): Promise<{ daemon: WebSocket; viewport: WebSocket; v: string }> {
+  const daemon = await opened(dial(r, "/daemon", PAIR));
+  const openMsg = nextMessage(daemon);
+  const viewport = await opened(dial(r, "/ws", PAIR));
+  const { v } = JSON.parse(await openMsg) as { v: string };
+  return { daemon, viewport, v };
 }
 
 test("health answers ok; every other HTTP path is 404 (serves no bundle)", async () => {
@@ -168,6 +178,28 @@ test("caps live connections from one source IP", async () => {
   try {
     await opened(dial(r, "/daemon", PAIR));
     await opened(dial(r, "/ws", PAIR));
+    assert.equal(await closeCode(dial(r, "/ws", PAIR)), CLOSE_OVERLOADED);
+  } finally {
+    await r.close();
+  }
+});
+
+test("caps the RATE of new connections from one source IP (churn the concurrent cap can't see)", async () => {
+  // Concurrent per-IP cap disabled to isolate the rate gate; a wide window so
+  // all attempts fall inside it. Three new connections are allowed; the fourth
+  // from the same source is refused even though the earlier ones already closed
+  // — exactly the open/close churn the concurrent count never registers.
+  const r = await relay({
+    maxNewConnectionsPerIp: 3,
+    newConnectionWindowMs: 60_000,
+    maxConnectionsPerIp: 0,
+  });
+  try {
+    // Viewports for a pair no daemon holds: each would close with CLOSE_BAD_CODE
+    // on its own, but the rate gate runs first and counts every attempt.
+    for (let i = 0; i < 3; i++) {
+      assert.equal(await closeCode(dial(r, "/ws", PAIR)), CLOSE_BAD_CODE);
+    }
     assert.equal(await closeCode(dial(r, "/ws", PAIR)), CLOSE_OVERLOADED);
   } finally {
     await r.close();
@@ -304,6 +336,16 @@ test("entitlement gate (daemons): unset admits any; configured requires a valid,
     const rOff = await relay({ entitlementPublicKey: pubB64, entitlementMaxTtlSeconds: 0 });
     try {
       await opened(dial(rOff, "/daemon", PAIR, ent(mint(privateKey, farOut))));
+      // Even with the ceiling off, a correctly signed token whose `exp` decodes
+      // to Infinity (JSON `1e999`) is refused — Number.isFinite closes the
+      // never-expiring case the mint helper can't even express (JSON.stringify
+      // turns Infinity into null).
+      const infSeg = Buffer.from('{"exp":1e999}').toString("base64url");
+      const infSig = signMessage(null, Buffer.from(infSeg), privateKey).toString("base64url");
+      assert.equal(
+        await closeCode(dial(rOff, "/daemon", "infinity-pair-id-22-c", ent(`${infSeg}.${infSig}`))),
+        CLOSE_UNENTITLED,
+      );
     } finally {
       await rOff.close();
     }
@@ -313,8 +355,7 @@ test("entitlement gate (daemons): unset admits any; configured requires a valid,
 test("drops a connection that floods past the frame-rate budget", async () => {
   const r = await relay({ rateMaxFrames: 5, rateWindowMs: 60_000 });
   try {
-    await opened(dial(r, "/daemon", PAIR));
-    const viewport = await opened(dial(r, "/ws", PAIR));
+    const { viewport } = await paired(r);
     const dropped = closeCode(viewport);
     for (let i = 0; i < 10; i++) viewport.send(`flood-${i}`);
     assert.equal(await dropped, CLOSE_RATE_LIMITED);
@@ -330,10 +371,7 @@ test("handshake timeouts bound the handshake only — a live WebSocket is never 
   // stopped clearing these timers on upgrade, this test catches it.
   const r = await relay({ headersTimeoutMs: 200, requestTimeoutMs: 300 });
   try {
-    const daemon = await opened(dial(r, "/daemon", PAIR));
-    const openMsg = nextMessage(daemon);
-    const viewport = await opened(dial(r, "/ws", PAIR));
-    const { v } = JSON.parse(await openMsg) as { v: string };
+    const { daemon, viewport, v } = await paired(r);
     await new Promise((res) => setTimeout(res, 700)); // idle past both timeouts
     const arrived = nextMessage(viewport);
     daemon.send(JSON.stringify({ t: "frame", v, p: "still-forwarding" }));
@@ -404,10 +442,7 @@ test("a daemon leaving closes its viewports; a viewport leaving notifies the dae
   const r = await relay();
   try {
     // Viewport leaves → daemon hears {t:"close",v}.
-    const daemon = await opened(dial(r, "/daemon", PAIR));
-    const openMsg = nextMessage(daemon);
-    const viewport = await opened(dial(r, "/ws", PAIR));
-    const { v } = JSON.parse(await openMsg) as { v: string };
+    const { daemon, viewport, v } = await paired(r);
     const closed = nextMessage(daemon);
     viewport.close();
     assert.deepEqual(JSON.parse(await closed), { t: "close", v });
@@ -426,10 +461,7 @@ test("a daemon leaving closes its viewports; a viewport leaving notifies the dae
 test("malformed daemon frames — bad envelopes and non-string payloads — are dropped, never fatal", async () => {
   const r = await relay();
   try {
-    const daemon = await opened(dial(r, "/daemon", PAIR));
-    const openMsg = nextMessage(daemon);
-    const viewport = await opened(dial(r, "/ws", PAIR));
-    const { v } = JSON.parse(await openMsg) as { v: string };
+    const { daemon, viewport, v } = await paired(r);
 
     // Two once-fatal crash classes, both an uncaught throw in the daemon
     // handler that killed the process (dropping every live pairing):
@@ -463,10 +495,7 @@ test("malformed daemon frames — bad envelopes and non-string payloads — are 
 test("oversize frames kill the sender, not the relay", async () => {
   const r = await relay({ maxPayloadBytes: 1024 });
   try {
-    const daemon = await opened(dial(r, "/daemon", PAIR));
-    const openMsg = nextMessage(daemon);
-    const viewport = await opened(dial(r, "/ws", PAIR));
-    await openMsg;
+    const { daemon, viewport } = await paired(r);
     const dropped = closeCode(viewport);
     viewport.send("z".repeat(4096));
     assert.equal(await dropped, 1009); // ws standard "message too big"

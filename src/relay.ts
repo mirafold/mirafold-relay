@@ -1,6 +1,6 @@
 // genui-relay — the deployable dumb forwarder (PLAN Step R.2).
 //
-// The stub's shape (genui-shell server/relay-stub.ts) grown up for the world:
+// The stub's shape (genui-shell server/relay/relay-stub.ts) grown up for the world:
 // same routing, hardened for a public port. It matches ONE daemon dial-in to
 // any number of browser viewports by pair id and shuttles opaque payloads. It
 // parses only the envelope's routing fields (`t`/`v`/`pair`), never `p` (the
@@ -82,6 +82,11 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
   const pairs = new Map<string, Pair>();
   const meta = new WeakMap<WebSocket, Meta>();
   const perIp = new Map<string, number>();
+  // Per-IP sliding window of new-connection attempts (the churn gate, distinct
+  // from perIp's concurrent count). Unlike perIp it is NOT freed when an IP's
+  // sockets close — the whole point is to remember attempts across the window
+  // even after they disconnect — so stale entries are swept in the heartbeat.
+  const perIpRate = new Map<string, { windowStart: number; count: number }>();
   let connections = 0;
 
   const ipHeader = opts.clientIpHeader?.toLowerCase() ?? "";
@@ -92,6 +97,22 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
       if (first) return first;
     }
     return req.socket.remoteAddress ?? "unknown";
+  };
+
+  // Per-IP new-connection rate gate. Returns true if this fresh connection is
+  // within the window budget; false once a source has opened too many too fast.
+  // Counts every attempt, whether or not the socket then closes — that is how
+  // it catches open/close churn the concurrent per-IP cap can't. 0 = disabled.
+  const withinConnectRate = (ip: string): boolean => {
+    if (cfg.maxNewConnectionsPerIp <= 0) return true;
+    const now = Date.now();
+    const r = perIpRate.get(ip);
+    if (!r || now - r.windowStart >= cfg.newConnectionWindowMs) {
+      perIpRate.set(ip, { windowStart: now, count: 1 });
+      return true;
+    }
+    r.count++;
+    return r.count <= cfg.maxNewConnectionsPerIp;
   };
 
   // Viewport Origin allowlist. Empty set = allow any (preserves the pre-gate
@@ -304,6 +325,13 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
         ws.close(CLOSE_OVERLOADED);
         return;
       }
+      // Per-source rate gate: the concurrent cap above can't see a source that
+      // opens and closes connections in a tight loop; this bounds that churn.
+      if (!withinConnectRate(ip)) {
+        log(`per-IP new-connection rate exceeded (${cfg.maxNewConnectionsPerIp}/${cfg.newConnectionWindowMs}ms) — refusing one source`);
+        ws.close(CLOSE_OVERLOADED);
+        return;
+      }
       // Origin gate (viewports only): with an allowlist configured, a socket
       // from any other web origin is refused before it can pair. Daemons carry
       // no Origin and are never gated here.
@@ -343,6 +371,14 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
               }
               m.alive = false;
               ws.ping();
+            }
+          }
+          // Evict connect-rate windows that have fully elapsed, so the map holds
+          // only sources seen within the last window rather than every IP ever.
+          if (perIpRate.size > 0) {
+            const now = Date.now();
+            for (const [ip, r] of perIpRate) {
+              if (now - r.windowStart >= cfg.newConnectionWindowMs) perIpRate.delete(ip);
             }
           }
         }, cfg.heartbeatMs)
@@ -398,8 +434,16 @@ function entitlementValid(
     const payload = JSON.parse(Buffer.from(payloadSeg, "base64url").toString("utf8")) as {
       exp?: unknown;
     };
-    if (typeof payload.exp !== "number" || payload.exp * 1000 <= Date.now()) return false;
-    return maxTtlSeconds === 0 || payload.exp * 1000 <= Date.now() + maxTtlSeconds * 1000;
+    // Number.isFinite rejects a non-number, NaN, AND ±Infinity in one check.
+    // The last matters: JSON.parse turns `1e999` into Infinity, and with the
+    // max-TTL ceiling disabled (maxTtlSeconds === 0) an Infinity `exp` would
+    // otherwise sail through as a never-expiring token. Only a holder of the
+    // minter's private key could sign one, but the check costs nothing.
+    if (!Number.isFinite(payload.exp)) return false;
+    const expMs = (payload.exp as number) * 1000;
+    const now = Date.now();
+    if (expMs <= now) return false;
+    return maxTtlSeconds === 0 || expMs <= now + maxTtlSeconds * 1000;
   } catch {
     return false;
   }

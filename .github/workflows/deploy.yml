@@ -34,9 +34,16 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v5
+      # Pinned version, not "latest": the installer is `curl | sh`, so an
+      # unpinned run would fetch and execute whatever the script resolves to
+      # that day — a tampered release could plant a trojaned flyctl that the
+      # deploy step below then runs WITH FLY_API_TOKEN in scope. Pinning makes
+      # the installed binary deterministic and reviewable. Bump deliberately.
+      # The token is intentionally NOT in this step's env (only the deploy +
+      # status steps), so the fetch itself never sees it.
       - name: Install flyctl
         run: |
-          curl -L https://fly.io/install.sh | sh
+          curl -L https://fly.io/install.sh | sh -s v0.4.74
           echo "$HOME/.fly/bin" >> "$GITHUB_PATH"
       # --ha=false: pair affinity needs exactly ONE machine (DEPLOY.md §1);
       # harmless on an existing single-machine app, load-bearing if the app
