@@ -10,8 +10,10 @@
 //
 //   ENTITLEMENT_PRIVATE_KEY=… node scripts/entitlement.mjs mint --ttl 48h
 //     Mint one compact entitlement token ("<b64url({exp})>.<b64url(sig)>") —
-//     the hand-issued path for comped beta testers (they set it as
-//     MIRAFOLD_ENTITLEMENT_TOKEN) and for ops smoke tests. The private key is
+//     the OPS/EMERGENCY hand-issued path (set as MIRAFOLD_ENTITLEMENT_TOKEN;
+//     also feeds smoke's RELAY_ENTITLEMENT_TOKEN). NOT a tester channel —
+//     beta testers pay real subscriptions and get keys via /pay, never
+//     minted tokens (Kyle's rule, 2026-07-23). The private key is
 //     read from the environment, never argv, so it can't land in shell history.
 //     TTL forms: 90m, 48h, 7d, or bare seconds. Default 48h.
 //

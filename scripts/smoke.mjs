@@ -6,6 +6,11 @@
 // (RELAY_ALLOWED_ORIGINS); every viewport connection presents it as its
 // Origin header. Omit it only against a relay with no origin gate configured.
 //
+// Against a relay with the entitlement gate ON, set RELAY_ENTITLEMENT_TOKEN
+// (mint one: ENTITLEMENT_PRIVATE_KEY=… node scripts/entitlement.mjs mint) —
+// env, never argv, so the live token can't land in shell history. Without it
+// a gated relay refuses the dial-in (4007) and the smoke says so and stops.
+//
 // Proves, against the LIVE relay: (1) /health answers over HTTPS, (2) a daemon
 // dial-in and a viewport pair up, (3) an opaque payload round-trips both ways
 // byte-identically, (4) a wrong pair id is refused, and — when an origin is
@@ -27,6 +32,9 @@ if (!/^wss?:\/\//.test(url) || (origin && !/^https?:\/\//.test(origin))) {
 // Browsers stamp Origin on every WebSocket; the relay's viewport gate keys on
 // it, so the smoke's viewports must present the allowed one to be admitted.
 const viewportHeaders = origin ? { headers: { origin } } : {};
+// Header name pinned by src/contract.ts ENTITLEMENT_HEADER.
+const token = process.env.RELAY_ENTITLEMENT_TOKEN ?? "";
+const daemonHeaders = token ? { headers: { "mirafold-entitlement": token } } : {};
 const httpUrl = url.replace(/^ws/, "http");
 const pair = randomBytes(16).toString("base64url"); // 22 chars, like a real pairId
 
@@ -58,8 +66,19 @@ try {
   }
   step(`health ok (${httpUrl}/health)`);
 
-  const daemon = await opened(new WebSocket(`${url}/daemon?pair=${pair}`), "daemon");
+  const daemon = await opened(new WebSocket(`${url}/daemon?pair=${pair}`, daemonHeaders), "daemon");
   step("daemon dialed in");
+  // A gated relay accepts the handshake, then refuses (4007 = unentitled).
+  // Without this, the smoke waits out its whole deadline on a dead pairing.
+  daemon.once("close", (code) => {
+    if (code === 4007) {
+      console.error(
+        "✗ relay refused the daemon as unentitled (4007) — the entitlement gate is ON; " +
+          "mint a token (scripts/entitlement.mjs mint) and re-run with RELAY_ENTITLEMENT_TOKEN set",
+      );
+      process.exit(1);
+    }
+  });
 
   const openMsg = nextMessage(daemon);
   const viewport = await opened(
