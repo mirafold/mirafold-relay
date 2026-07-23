@@ -15,6 +15,7 @@ import net from "node:net";
 import { WebSocket } from "ws";
 import type { Limits } from "../src/limits.js";
 import { startRelay, type Relay, type RelayOptions } from "../src/relay.js";
+import type { RelayEvent } from "../src/log.js";
 import {
   CLOSE_BAD_CODE,
   CLOSE_CODE_TAKEN,
@@ -74,6 +75,9 @@ test("health answers ok; every other HTTP path is 404 (serves no bundle)", async
     const health = await fetch(`${base}/health`);
     assert.equal(health.status, 200);
     assert.equal(await health.text(), "ok");
+    // Uptime monitors commonly probe with HEAD — it must answer too.
+    const headProbe = await fetch(`${base}/health`, { method: "HEAD" });
+    assert.equal(headProbe.status, 200);
     for (const path of ["/", "/index.html", "/assets/app.js", "/daemon"]) {
       assert.equal((await fetch(`${base}${path}`)).status, 404, path);
     }
@@ -536,4 +540,76 @@ test('an empty-string env override means "unset", never 0', async () => {
   assert.equal(empty.heartbeatMs, unset.heartbeatMs); // whitespace ≡ unset
   assert.equal(unset.maxPairs, 0); // explicit "0" still means 0…
   assert.equal(empty.maxPairs, 0); // …in both runs
+});
+
+test("structured log: lifecycle events carry volume metadata and never a payload, pair id, or IP", async () => {
+  const events: RelayEvent[] = [];
+  const r = await relay({ log: (e) => events.push(e) });
+  try {
+    const { daemon, viewport, v } = await paired(r);
+
+    const payload = "SECRET-CIPHERTEXT-" + "z".repeat(200);
+    const arrived = nextMessage(viewport);
+    daemon.send(JSON.stringify({ t: "frame", v, p: payload }));
+    await arrived;
+    const up = "UPSTREAM-SECRET-" + "w".repeat(100);
+    const framed = nextMessage(daemon);
+    viewport.send(up);
+    await framed;
+
+    viewport.close();
+    await new Promise((res) => viewport.once("close", res));
+    const unpaired = new Promise((res) => daemon.once("close", res));
+    daemon.close();
+    await unpaired;
+    // The unpair event lands on the server's own close handler — settle it.
+    await new Promise((res) => setTimeout(res, 50));
+
+    const byName = (name: string) => events.filter((e) => e.event === name);
+    assert.equal(byName("listening").length, 1);
+    assert.equal(byName("daemon_paired").length, 1);
+    assert.equal(byName("viewport_opened").length, 1);
+    assert.equal(byName("viewport_closed").length, 1);
+    const un = byName("daemon_unpaired")[0] as Extract<RelayEvent, { event: "daemon_unpaired" }>;
+    assert.ok(un, "daemon_unpaired must be emitted");
+    assert.equal(un.frames, 2); // one frame each way
+    assert.equal(un.bytes, payload.length + up.length); // volume, both directions
+    assert.ok(un.durationMs >= 0);
+
+    // The audit claim, mechanically: nothing that crosses or names the pairing
+    // may appear in any event — not the payloads, not the pair id, and no
+    // client address. (`listening` is exempt from the address check — its host
+    // is the relay's own bind address, not a client's.)
+    const dump = JSON.stringify(events);
+    assert.ok(!dump.includes("SECRET"), "no payload content in events");
+    assert.ok(!dump.includes(PAIR), "no pair id in events");
+    const clientDump = JSON.stringify(events.filter((e) => e.event !== "listening"));
+    assert.ok(!clientDump.includes("127.0.0.1"), "no client IP in events");
+  } finally {
+    await r.close();
+  }
+});
+
+test("structured log: refusals name the reason (bad pair id, both roles)", async () => {
+  const events: RelayEvent[] = [];
+  const r = await relay({ log: (e) => events.push(e) });
+  try {
+    // A viewport with no live pairing behind its id.
+    assert.equal(await closeCode(dial(r, "/ws", PAIR)), CLOSE_BAD_CODE);
+    // A daemon with a too-short (guessable) id.
+    assert.equal(await closeCode(dial(r, "/daemon", "short")), CLOSE_CODE_TAKEN);
+    const refused = events.filter((e) => e.event === "refused") as Extract<
+      RelayEvent,
+      { event: "refused" }
+    >[];
+    assert.deepEqual(
+      refused.map((e) => [e.role, e.reason]),
+      [
+        ["viewport", "bad_pair_id"],
+        ["daemon", "bad_pair_id"],
+      ],
+    );
+  } finally {
+    await r.close();
+  }
 });

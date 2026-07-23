@@ -31,12 +31,14 @@ import {
   type RelayToDaemon,
 } from "./contract.js";
 import { LIMITS, type Limits } from "./limits.js";
+import { stdoutLog, type RelayLog } from "./log.js";
 
 export type RelayOptions = Partial<Limits> & {
   port?: number;
   host?: string;
-  /** Structured, frame-content-free logging. Defaults to timestamped stdout. */
-  log?: (line: string) => void;
+  /** Structured, metadata-only event log (see log.ts for the full schema —
+   * never payloads, pairing ids, or IPs). Defaults to JSON lines on stdout. */
+  log?: RelayLog;
   /** Request header carrying the true client IP, set by the trusted proxy in
    * front of us (e.g. "fly-client-ip"). The socket address is the proxy's, so
    * without this every connection shares one per-IP bucket. Empty = direct
@@ -67,17 +69,25 @@ export type Relay = {
   close: () => Promise<void>;
 };
 
-type Pair = { daemon: WebSocket; viewports: Map<string, WebSocket> };
+// openedAt/frames/bytes feed the daemon_unpaired volume event — counts of the
+// opaque traffic forwarded, both directions, never its content.
+type Pair = {
+  daemon: WebSocket;
+  viewports: Map<string, WebSocket>;
+  openedAt: number;
+  frames: number;
+  bytes: number;
+};
 
 // Per-socket bookkeeping the ws library doesn't give us: liveness for the
-// heartbeat reaper, and a sliding frame counter for the rate limit.
-type Meta = { alive: boolean; windowStart: number; frames: number };
+// heartbeat reaper, a sliding frame counter for the rate limit, and the open
+// stamp for close-event durations.
+type Meta = { alive: boolean; windowStart: number; frames: number; openedAt: number };
 
 export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
   const cfg: Limits = { ...LIMITS, ...stripUndefined(opts) };
   const host = opts.host ?? "0.0.0.0";
-  const log =
-    opts.log ?? ((line: string) => console.log(`[${new Date().toISOString()}] ${line}`));
+  const log = opts.log ?? stdoutLog;
 
   const pairs = new Map<string, Pair>();
   const meta = new WeakMap<WebSocket, Meta>();
@@ -160,7 +170,9 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
     (req, res) => {
       // The ONLY HTTP surface: a health check. Everything else is 404 — the
       // relay serves no app bundle by design (README, the trust decision).
-      if (req.method === "GET" && req.url === "/health") {
+      // HEAD is answered too: uptime monitors commonly probe with it (Node
+      // suppresses the body on HEAD automatically).
+      if ((req.method === "GET" || req.method === "HEAD") && req.url === "/health") {
         res.writeHead(200, { "content-type": "text/plain" }).end("ok");
         return;
       }
@@ -180,12 +192,13 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
   // uncaughtException in main.ts) and drop every live pairing. Swallow and
   // log — ws follows up with its own close (e.g. 1009) on that socket only.
   const guard = (ws: WebSocket) =>
-    ws.on("error", (err: Error) => log(`socket error: ${err.message}`));
+    ws.on("error", (err: Error) => log({ event: "socket_error", message: err.message }));
 
   const track = (ws: WebSocket, ip: string) => {
     connections++;
     perIp.set(ip, (perIp.get(ip) ?? 0) + 1);
-    meta.set(ws, { alive: true, windowStart: Date.now(), frames: 0 });
+    const now = Date.now();
+    meta.set(ws, { alive: true, windowStart: now, frames: 0, openedAt: now });
     ws.on("pong", () => {
       const m = meta.get(ws);
       if (m) m.alive = true;
@@ -210,7 +223,7 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
       m.frames = 0;
     }
     if (++m.frames > cfg.rateMaxFrames) {
-      log(`rate limit exceeded (${m.frames} frames/${cfg.rateWindowMs}ms) — closing`);
+      log({ event: "rate_limited", frames: m.frames, windowMs: cfg.rateWindowMs });
       ws.close(CLOSE_RATE_LIMITED);
       return false;
     }
@@ -222,18 +235,19 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
     // dial-in is refused, never silently adopted. And no more distinct
     // pairs than the cap — a hostile flood of dial-ins can't exhaust us.
     if (pairId.length < MIN_PAIR_ID_LENGTH || pairs.has(pairId)) {
+      log({ event: "refused", role: "daemon", reason: "bad_pair_id" });
       ws.close(CLOSE_CODE_TAKEN);
       return;
     }
     if (pairs.size >= cfg.maxPairs) {
-      log(`pair cap reached (${cfg.maxPairs}) — refusing daemon`);
+      log({ event: "refused", role: "daemon", reason: "pair_cap", limit: cfg.maxPairs });
       ws.close(CLOSE_OVERLOADED);
       return;
     }
     track(ws, ip);
-    const pair: Pair = { daemon: ws, viewports: new Map() };
+    const pair: Pair = { daemon: ws, viewports: new Map(), openedAt: Date.now(), frames: 0, bytes: 0 };
     pairs.set(pairId, pair);
-    log(`daemon paired (${pairs.size} pair(s), ${connections} conn)`);
+    log({ event: "daemon_paired", pairs: pairs.size, connections });
     ws.on("message", (data: RawData) => {
       if (!withinRate(ws)) return;
       let env: DaemonToRelay;
@@ -252,6 +266,8 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
       // non-string (object/bool/null), and that throw here is uncaught — it
       // would kill the process. So a mistyped `p` is dropped, not forwarded.
       if (env.t === "frame" && typeof env.p === "string" && viewport?.readyState === WebSocket.OPEN) {
+        pair.frames++;
+        pair.bytes += env.p.length;
         viewport.send(env.p); // opaque — routed, never parsed
       } else if (env.t === "close") {
         viewport?.close(CLOSE_BAD_CODE);
@@ -260,13 +276,20 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
     ws.on("close", () => {
       pairs.delete(pairId);
       for (const viewport of pair.viewports.values()) viewport.close(CLOSE_BAD_CODE);
-      log(`daemon unpaired (${pairs.size} pair(s) left)`);
+      log({
+        event: "daemon_unpaired",
+        pairs: pairs.size,
+        durationMs: Date.now() - pair.openedAt,
+        frames: pair.frames,
+        bytes: pair.bytes,
+      });
     });
   };
 
   const acceptViewport = (ws: WebSocket, pairId: string, ip: string) => {
     const pair = pairs.get(pairId);
     if (!pair) {
+      log({ event: "refused", role: "viewport", reason: "bad_pair_id" });
       ws.close(CLOSE_BAD_CODE);
       return;
     }
@@ -274,7 +297,7 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
     // cap (defense in depth — a hostile relay-adjacent flood must not force
     // the daemon to fend off unbounded announcements).
     if (pair.viewports.size >= cfg.maxViewportsPerPair) {
-      log(`viewport cap reached for a pair (${cfg.maxViewportsPerPair}) — refusing`);
+      log({ event: "refused", role: "viewport", reason: "viewport_cap", limit: cfg.maxViewportsPerPair });
       ws.close(CLOSE_OVERLOADED);
       return;
     }
@@ -286,16 +309,27 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
       v = randomUUID().slice(0, 8);
     } while (pair.viewports.has(v));
     pair.viewports.set(v, ws);
+    log({ event: "viewport_opened", viewports: pair.viewports.size, connections });
     pair.daemon.send(JSON.stringify({ t: "open", v } satisfies RelayToDaemon));
     ws.on("message", (data: RawData) => {
       if (!withinRate(ws)) return;
       if (pair.daemon.readyState === WebSocket.OPEN) {
-        pair.daemon.send(JSON.stringify({ t: "frame", v, p: String(data) } satisfies RelayToDaemon));
+        const p = String(data);
+        pair.frames++;
+        pair.bytes += p.length;
+        pair.daemon.send(JSON.stringify({ t: "frame", v, p } satisfies RelayToDaemon));
       }
     });
     ws.on("close", () => {
-      if (pair.viewports.delete(v) && pair.daemon.readyState === WebSocket.OPEN) {
-        pair.daemon.send(JSON.stringify({ t: "close", v } satisfies RelayToDaemon));
+      if (pair.viewports.delete(v)) {
+        log({
+          event: "viewport_closed",
+          viewports: pair.viewports.size,
+          durationMs: Date.now() - (meta.get(ws)?.openedAt ?? Date.now()),
+        });
+        if (pair.daemon.readyState === WebSocket.OPEN) {
+          pair.daemon.send(JSON.stringify({ t: "close", v } satisfies RelayToDaemon));
+        }
       }
     });
   };
@@ -313,22 +347,23 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
       guard(ws);
       // Global capacity gate: the refused socket exists only long enough to
       // be told why (the client sees a clean CLOSE_OVERLOADED, not a hangup).
+      const role = isDaemon ? ("daemon" as const) : ("viewport" as const);
       if (connections >= cfg.maxConnections) {
-        log(`connection cap reached (${cfg.maxConnections}) — refusing`);
+        log({ event: "refused", role, reason: "connection_cap", limit: cfg.maxConnections });
         ws.close(CLOSE_OVERLOADED);
         return;
       }
       // Per-source gate: one host can't hold more than its share, so it can
       // neither exhaust the global budget nor squat every pair slot.
       if (cfg.maxConnectionsPerIp > 0 && (perIp.get(ip) ?? 0) >= cfg.maxConnectionsPerIp) {
-        log(`per-IP cap reached (${cfg.maxConnectionsPerIp}) — refusing one source`);
+        log({ event: "refused", role, reason: "per_ip_cap", limit: cfg.maxConnectionsPerIp });
         ws.close(CLOSE_OVERLOADED);
         return;
       }
       // Per-source rate gate: the concurrent cap above can't see a source that
       // opens and closes connections in a tight loop; this bounds that churn.
       if (!withinConnectRate(ip)) {
-        log(`per-IP new-connection rate exceeded (${cfg.maxNewConnectionsPerIp}/${cfg.newConnectionWindowMs}ms) — refusing one source`);
+        log({ event: "refused", role, reason: "per_ip_rate", limit: cfg.maxNewConnectionsPerIp });
         ws.close(CLOSE_OVERLOADED);
         return;
       }
@@ -336,7 +371,7 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
       // from any other web origin is refused before it can pair. Daemons carry
       // no Origin and are never gated here.
       if (!isDaemon && !originAllowed(req)) {
-        log(`viewport origin refused (${req.headers.origin ?? "none"})`);
+        log({ event: "refused", role, reason: "origin", origin: req.headers.origin ?? "none" });
         ws.close(CLOSE_FORBIDDEN_ORIGIN);
         return;
       }
@@ -345,7 +380,7 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
       // gate. Viewports need no token; a pairing only exists behind an entitled
       // daemon, so the daemon's entitlement covers it.
       if (isDaemon && !entitled(req)) {
-        log(`daemon entitlement refused`);
+        log({ event: "refused", role, reason: "entitlement" });
         ws.close(CLOSE_UNENTITLED);
         return;
       }
@@ -388,7 +423,7 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
   return new Promise((resolve) => {
     server.listen(opts.port ?? 0, host, () => {
       const port = (server.address() as { port: number }).port;
-      log(`genui-relay listening on ${host}:${port}`);
+      log({ event: "listening", host, port });
       resolve({
         port,
         host,

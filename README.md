@@ -166,6 +166,30 @@ on a successful upgrade, so a live viewport or daemon socket is never severed by
 them. This matters most on the self-host/VPS path — behind Fly.io the edge
 already bounds concurrency, but a bare `node`-on-a-VPS deploy has no such floor.
 
+## What the relay logs
+
+One JSON object per line on stdout — structured, metadata-only events, and the
+list below is **exhaustive**: it is the complete claim about what this service
+records. The typed schema lives in `src/log.ts`; a test pins that the lifecycle
+events stay free of payloads and pairing ids.
+
+| event | fields | when |
+| --- | --- | --- |
+| `listening` | `host`, `port` | boot (the relay's own bind address) |
+| `daemon_paired` | `pairs`, `connections` | a daemon opens a pairing |
+| `daemon_unpaired` | `pairs`, `durationMs`, `frames`, `bytes` | that pairing ends — traffic *volume* across its lifetime, both directions |
+| `viewport_opened` / `viewport_closed` | counts, `durationMs` | a browser joins/leaves a pairing |
+| `refused` | `role`, `reason`, `limit?`, `origin?` | any gate turns a socket away (`bad_pair_id`, `pair_cap`, `viewport_cap`, `connection_cap`, `per_ip_cap`, `per_ip_rate`, `origin`, `entitlement`) |
+| `rate_limited` | `frames`, `windowMs` | a socket exceeds the frame budget and is closed |
+| `socket_error` | `message` | a ws protocol violation (the socket is closed, the process lives) |
+| `shutdown` / `crash` | `signal` / `kind`, `message` | process lifecycle |
+
+What never appears in any event, by construction: **frame payloads** (E2E
+ciphertext the relay could not read anyway), **pairing ids** (bearer secrets),
+and **client IP addresses** (IPs are counted in-memory for the DoS caps above,
+then discarded — a `refused` event says a cap fired, never who hit it). Nothing
+is written anywhere but stdout; the relay stores nothing.
+
 ## Repository layout
 
 ```

@@ -3,6 +3,7 @@
 // and shuts down cleanly on SIGTERM/SIGINT (the platform's stop signal).
 
 import { startRelay } from "./relay.js";
+import { stdoutLog } from "./log.js";
 
 const relay = await startRelay({
   port: Number(process.env.PORT ?? 8080),
@@ -26,7 +27,7 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
   process.on(sig, () => {
     if (closing) return;
     closing = true;
-    console.log(`[${new Date().toISOString()}] ${sig} — draining and closing`);
+    stdoutLog({ event: "shutdown", signal: sig });
     relay.close().then(() => process.exit(0));
     // Never hang the platform's stop past its grace window.
     setTimeout(() => process.exit(0), 5_000).unref();
@@ -34,11 +35,14 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
 }
 
 // A crash stays loud and exits nonzero (the platform restarts the instance).
-process.on("uncaughtException", (err) => {
-  console.error(`[${new Date().toISOString()}] uncaughtException:`, err);
+// The message field carries our own stack — server code paths, not user data.
+const crash = (kind: string) => (err: unknown) => {
+  stdoutLog({
+    event: "crash",
+    kind,
+    message: err instanceof Error ? (err.stack ?? err.message) : String(err),
+  });
   process.exit(1);
-});
-process.on("unhandledRejection", (err) => {
-  console.error(`[${new Date().toISOString()}] unhandledRejection:`, err);
-  process.exit(1);
-});
+};
+process.on("uncaughtException", crash("uncaughtException"));
+process.on("unhandledRejection", crash("unhandledRejection"));
