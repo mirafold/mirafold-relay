@@ -1,0 +1,40 @@
+# genui-relay STAGING (PLAN R.5d) — a second app from the same Dockerfile,
+# for proving a ref against real TLS, the fly-client-ip header, and Fly
+# machine lifecycle before dispatching it to production. Differences from
+# production fly.toml, all deliberate:
+#   - app name (genui-relay-staging; the *.fly.dev URL is fine — nothing
+#     installed ever points at staging, so the own-domain rule doesn't apply)
+#   - auto_stop/min_machines_running: staging IDLES AT ZERO — a stopped
+#     machine dropping pairings costs nothing here, and a dial wakes it
+#   - no entitlement key or origin allowlist secrets are set: staging is
+#     ungated, so the smoke passes end-to-end without a minted token
+
+app = "genui-relay-staging"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  HOST = "0.0.0.0"
+  RELAY_CLIENT_IP_HEADER = "fly-client-ip"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 2000
+    soft_limit = 1800
+
+[[http_service.checks]]
+  method = "get"
+  path = "/health"
+  interval = "15s"
+  timeout = "2s"
+  grace_period = "5s"

@@ -1,9 +1,12 @@
 name: Deploy
 
-# Manual-dispatch production deploy (Kyle's call, 2026-07-22): deployment is
-# gated on a human clicking "Run workflow" and choosing the ref to deploy —
-# nothing here runs on push, merge, or schedule. The branch/tag picker in the
-# dispatch UI is the "which branch goes to prod" choice.
+# Manual-dispatch deploy (Kyle's call, 2026-07-22): deployment is gated on a
+# human clicking "Run workflow" and choosing the ref to deploy — nothing here
+# runs on push, merge, or schedule. The branch/tag picker in the dispatch UI
+# is the "which ref deploys" choice; the environment dropdown picks staging
+# (default — genui-relay-staging, fly.staging.toml, idles at zero) or
+# production (genui-relay). R.5d flow: deploy a ref to staging → smoke →
+# dispatch the SAME ref to production.
 #
 # INERT UNTIL CONFIGURED: this job needs a FLY_API_TOKEN repo secret (create
 # one with `fly tokens create deploy -a genui-relay` after `fly auth login`,
@@ -17,6 +20,12 @@ name: Deploy
 
 on:
   workflow_dispatch:
+    inputs:
+      environment:
+        description: "Deploy target"
+        type: choice
+        default: staging
+        options: [staging, production]
 
 permissions:
   contents: read
@@ -24,14 +33,17 @@ permissions:
 # Never two deploys at once; a second dispatch waits (no cancel — an
 # interrupted `fly deploy` is worse than a queued one).
 concurrency:
-  group: deploy-production
+  group: deploy-${{ inputs.environment }}
   cancel-in-progress: false
 
 jobs:
   deploy:
     name: fly deploy
     runs-on: ubuntu-latest
-    environment: production
+    # Each GitHub Environment holds its own FLY_API_TOKEN, scoped to only
+    # its app (fly tokens create deploy -a <app>): staging's token cannot
+    # touch production and vice versa.
+    environment: ${{ inputs.environment }}
     steps:
       - uses: actions/checkout@v5
       # Pinned version, not "latest": the installer is `curl | sh`, so an
@@ -49,10 +61,12 @@ jobs:
       # harmless on an existing single-machine app, load-bearing if the app
       # was ever recreated.
       - name: Deploy
-        run: flyctl deploy --remote-only --ha=false
+        run: flyctl deploy --remote-only --ha=false --config "$FLY_CONFIG"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_CONFIG: ${{ inputs.environment == 'staging' && 'fly.staging.toml' || 'fly.toml' }}
       - name: Status
-        run: flyctl status
+        run: flyctl status --config "$FLY_CONFIG"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_CONFIG: ${{ inputs.environment == 'staging' && 'fly.staging.toml' || 'fly.toml' }}
