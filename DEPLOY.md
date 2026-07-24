@@ -148,6 +148,34 @@ Two standing constraints from `fly.toml`, do not "optimize" them away:
 - The daemon's default relay URL (today `MIRAFOLD_RELAY_URL` must be set by
   hand) gets baked in as the paid-tier default during R.5 entitlement work.
 
+## 6. Staging (R.5d — prove a ref before production)
+
+A second Fly app, `genui-relay-staging`, built from the same Dockerfile via
+`fly.staging.toml`. Differences from production, all deliberate: auto-stop
+with `min_machines_running = 0` (idles at zero cost — a dropped pairing is
+free in staging; a dial wakes it), the bare `*.fly.dev` URL (nothing
+installed ever points at staging, so the own-domain rule doesn't apply),
+and no entitlement/origin secrets (ungated — the smoke passes end-to-end
+without a minted token).
+
+**The flow it buys:**
+
+```
+# 1. Deploy the ref to staging: Actions → Deploy → Run workflow →
+#    pick the ref, environment = staging (the default)
+# 2. Smoke it:
+npm run smoke -- wss://genui-relay-staging.fly.dev
+# 3. Point a local shell at it for a real pairing check if warranted:
+MIRAFOLD_RELAY_URL=wss://genui-relay-staging.fly.dev mirafold
+# 4. Same workflow, same ref, environment = production
+```
+
+Tokens: each GitHub Environment (staging, production) holds its own
+`FLY_API_TOKEN`, minted app-scoped with `fly tokens create deploy -a <app>`
+— staging's token cannot touch production and vice versa. One-time setup
+(done 2026-07-23): `fly apps create genui-relay-staging`, mint the token,
+create the GitHub environment, set the secret.
+
 ## Rollback of the whole idea
 
 Nothing here locks us in: the artifact is a plain Node process (`npm run
