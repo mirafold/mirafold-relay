@@ -176,6 +176,82 @@ Tokens: each GitHub Environment (staging, production) holds its own
 (done 2026-07-23): `fly apps create genui-relay-staging`, mint the token,
 create the GitHub environment, set the secret.
 
+## 7. Secret rotation (rotate-on-event, not calendar)
+
+Two deploy-side secrets rotate here; the Pages-side billing secrets
+(`ENTITLEMENT_PRIVATE_KEY`, Paddle keys) rotate in `mirafold-site` — its
+PLAN.md holds that runbook. Policy is rotate-on-event (suspected exposure,
+a departing collaborator), and each is app-scoped so blast radius is one app.
+
+- **`FLY_API_TOKEN` (GitHub Environment secret, per environment).** Mint a
+  fresh one — `fly tokens create deploy -a genui-relay` (or `-staging`) —
+  set it under Settings → Secrets and variables → Actions → the matching
+  Environment, then revoke the old token in the Fly dashboard (Account →
+  Access Tokens). Disruption: none — the token is only read during a manual
+  deploy dispatch; nothing live depends on it. Do staging and production
+  separately (distinct tokens).
+
+- **`RELAY_ENTITLEMENT_PUBLIC_KEY` (Fly secret) — the coupled half of the
+  entitlement keypair.** This is HALF of a two-place rotation; the private
+  half is the `mirafold-site` Pages secret `ENTITLEMENT_PRIVATE_KEY`, and the
+  ORDER across the two decides the refusal-window size, so **rehearse on
+  `genui-relay-staging` first**. Generate the pair with
+  `node scripts/entitlement.mjs generate`. Because the relay holds exactly
+  ONE public key (no overlap window), rotation is a brief coordinated
+  cutover: set the new Pages private key + redeploy the site, then
+  immediately `fly secrets set RELAY_ENTITLEMENT_PUBLIC_KEY=<new>` (which
+  restarts the relay). Outstanding 48h tokens signed by the old key then fail
+  verification → daemons re-exchange their license key on the
+  `CLOSE_UNENTITLED` (4007) refusal and re-pair within one dial. Disruption:
+  seconds of remote-access refusal during the cutover; local sessions
+  untouched. Staging rehearsal proves the order and the self-heal before
+  it's ever done to production.
+
+## 8. DDoS posture + the Cloudflare-fronting exit (a shelf plan, not built)
+
+**Accepted position:** a volumetric flood on `relay.mirafold.sh` is an
+accepted availability risk. The relay is stateless and E2E-blind, holds no
+data, and every LOCAL session is untouched by a relay outage; daemons
+re-dial with backoff, so the blast radius is remote-access uptime for the
+duration of an attack, nothing more. Application-layer floods (one host or a
+modest botnet exhausting sockets/CPU) are already handled by the caps in the
+README. What no in-process code can absorb is a network-layer flood that
+saturates the pipe before our code runs — that's Fly's edge today, which
+gives some absorption but isn't dedicated DDoS mitigation.
+
+**The exit if it ever materializes: front the relay with Cloudflare's proxy**
+(free plan includes unmetered DDoS mitigation and proxies WebSockets). This
+is documented so it's a config change on a shelf, not a mid-incident
+scramble. Steps, in order:
+
+1. **DNS.** `relay.mirafold.sh` lives on the `mirafold.sh` zone at Namecheap
+   today (pointing straight at Fly). Move that zone to Cloudflare (or host
+   `relay` under the already-Cloudflare `mirafold.com`), and set the record
+   **proxied** (orange cloud) → Cloudflare terminates the edge and forwards
+   to the Fly origin. TLS: Cloudflare edge cert + Full (strict) to Fly, which
+   keeps its own cert — no relay change.
+2. **The trusted client-IP header changes.** With Cloudflare in front, Fly's
+   edge (and thus `fly-client-ip`) now reports Cloudflare's address, not the
+   real client — so the per-IP caps would collapse every visitor into one
+   bucket. Flip `RELAY_CLIENT_IP_HEADER` from `fly-client-ip` to
+   `cf-connecting-ip` (Cloudflare sets it to the true client). No code
+   change — it's already the env-driven `clientIpHeader` in `relay.ts`.
+3. **Close the origin bypass (the header-spoofing guard).** `cf-connecting-ip`
+   is only trustworthy if clients cannot reach the Fly origin directly and
+   spoof it. Restrict the Fly app to accept connections only from
+   Cloudflare's IP ranges (Fly firewall / `fly ips` allowlist, or an origin
+   check), so the header can't be forged by hitting Fly directly. This is the
+   same "never trust the proxy header on a port an untrusted client can reach"
+   rule already stated in `relay.ts`.
+4. **Optional: a Cloudflare rate-limiting rule** on the WebSocket path as a
+   second layer, mirroring the `/api/*` rule the site already uses.
+
+Caveats to check at execution time (why it's not pre-built): Cloudflare's
+free-plan WebSocket handling has connection-duration behavior worth verifying
+against the heartbeat interval, and moving the `mirafold.sh` zone touches DNS
+that currently also serves the install one-liner — both are fine but want a
+deliberate maintenance window, not an under-fire rush. Documented; not built.
+
 ## Rollback of the whole idea
 
 Nothing here locks us in: the artifact is a plain Node process (`npm run
