@@ -21,7 +21,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
     "smoke": "node scripts/smoke.mjs",
-    "load": "node scripts/load.mjs"
+    "load": "node scripts/load.mjs",
+    "deployed": "node scripts/deployed.mjs"
   },
   "dependencies": {
     "ws": "^8.21.0"

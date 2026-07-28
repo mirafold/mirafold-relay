@@ -121,8 +121,25 @@ Secrets and variables → Actions); until that secret exists it fails at auth
 and deploys nothing. Everything in §§0–3 (app create, certs, DNS, smoke)
 stays manual — the workflow only does the `fly deploy` half.
 
+**Before asking "should I deploy?", measure — never read it off a roadmap.**
+
+```
+npm run deployed
+```
+
+It prints, per environment, the Fly release and the commit the **live image**
+was built from (the `GH_SHA` label this workflow stamps onto every image),
+plus how far behind `origin/main` that is and whether the gap touches `src/`
+— the only path that ships. A deploy changes the world without leaving a diff
+in any repo, so a planning document records deploy *history* and can never be
+current state: on 2026-07-28 the ledger had a row for `v9` and none for `v10`,
+and a deploy was recommended for security work that had shipped two hours
+earlier. Note the script says "touches `src/`", not "changes behavior" — a
+refactor lands in `src/` too, so it hands you the diff and you make the call.
+
 | task | command |
 | --- | --- |
+| what's actually deployed, per env | `npm run deployed` |
 | tail logs | `fly logs` |
 | instance status / health | `fly status` |
 | restart | `fly apps restart genui-relay` |
