@@ -4,9 +4,13 @@
 // in README "What the relay logs".
 //
 // By construction no event ever carries: a frame payload (`p` is E2E
-// ciphertext the relay couldn't read anyway), a pairing id (a bearer secret),
-// or a client IP. Anything added here must preserve that — the public event
-// list is only an honest audit surface while it stays complete and clean.
+// ciphertext the relay couldn't read anyway), a pairing id, or a client IP.
+// The pairing id is NOT a bearer secret — the daemon derives it from the
+// pairing code by SHA-256, so it decrypts nothing and completes no
+// handshake — but holding it lets a stranger squat or flood that pair's
+// slot, so it stays out of the logs all the same. Anything added here must
+// preserve that — the public event list is only an honest audit surface
+// while it stays complete and clean.
 
 export type RefusalReason =
   | "bad_pair_id" // daemon: short/guessable or already-taken id; viewport: no such pairing
@@ -31,7 +35,10 @@ export type RelayEvent =
   // Carries no role (the path is what we failed to read) and never the target
   // itself — it's attacker-controlled text.
   | { event: "bad_request_target" }
-  | { event: "rate_limited"; frames: number; windowMs: number }
+  | { event: "rate_limited"; frames: number; bytes: number; windowMs: number }
+  // A receiver (slow phone, wedged daemon) whose socket buffered past the
+  // backpressure limit and was closed for it — queue sizes, never content.
+  | { event: "backpressure_closed"; role: "daemon" | "viewport"; buffered: number; limit: number }
   | { event: "socket_error"; message: string }
   | { event: "shutdown"; signal: string }
   | { event: "crash"; kind: string; message: string };

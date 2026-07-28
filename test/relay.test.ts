@@ -368,6 +368,58 @@ test("drops a connection that floods past the frame-rate budget", async () => {
   }
 });
 
+test("drops a connection that floods past the BYTE budget, frames within count", async () => {
+  // 2026-07-27 audit: the frame cap alone left rateMaxFrames × maxPayloadBytes
+  // legal per window. Few frames, big frames — the byte budget must fire.
+  const r = await relay({ rateMaxFrames: 1_000, rateMaxBytes: 10_000, rateWindowMs: 60_000 });
+  try {
+    const { daemon, viewport } = await paired(r);
+    // A small frame passes and forwards…
+    const arrived = nextMessage(daemon);
+    viewport.send("small");
+    assert.equal((JSON.parse(await arrived) as { p: string }).p, "small");
+    // …then one oversize-for-the-window frame trips the byte budget.
+    const dropped = closeCode(viewport);
+    viewport.send("x".repeat(20_000));
+    assert.equal(await dropped, CLOSE_RATE_LIMITED);
+    assert.equal(daemon.readyState, WebSocket.OPEN, "only the flooder pays");
+  } finally {
+    await r.close();
+  }
+});
+
+test("backpressure: a stalled viewport is closed CLOSE_OVERLOADED; the daemon survives", async () => {
+  // 2026-07-27 audit: without a bufferedAmount bound a slow receiver queues
+  // forwarded frames in relay memory without bound. Stall the viewport by
+  // pausing its TCP socket so the relay's sends stop draining, then pump
+  // from the daemon until the relay's buffer for it crosses the (tiny) limit.
+  const r = await relay({ maxBufferedBytes: 50_000, rateMaxBytes: 0, rateMaxFrames: 100_000 });
+  try {
+    const { daemon, viewport, v } = await paired(r);
+    // Pause the client-side socket: the OS window fills, then the relay-side
+    // ws buffer (bufferedAmount) grows with every forward. The pump is
+    // bounded but must comfortably exceed anything the kernel can absorb;
+    // once the limit trips, the relay's readyState guard skips the rest, so
+    // relay memory never holds more than the limit plus one frame.
+    const sock = (viewport as unknown as { _socket: { pause(): void; resume(): void } })._socket;
+    sock.pause();
+    const dropped = closeCode(viewport);
+    const chunk = "z".repeat(512 * 1024);
+    for (let i = 0; i < 400; i++) {
+      daemon.send(JSON.stringify({ t: "frame", v, p: chunk }));
+      // Yield so the relay processes each envelope before the next arrives.
+      await new Promise((res) => setImmediate(res));
+    }
+    // A paused socket can't read the server's close frame — resume so the
+    // client drains what buffered and then sees the close.
+    sock.resume();
+    assert.equal(await dropped, CLOSE_OVERLOADED, "stalled receiver is refused, not buffered");
+    assert.equal(daemon.readyState, WebSocket.OPEN, "the healthy side stays up");
+  } finally {
+    await r.close();
+  }
+});
+
 test("handshake timeouts bound the handshake only — a live WebSocket is never cut by them", async () => {
   // The pre-handshake floor must not sever an established, idle session (a
   // phone waiting between turns). Set both timeouts absurdly short, then idle a

@@ -80,9 +80,17 @@ type Pair = {
 };
 
 // Per-socket bookkeeping the ws library doesn't give us: liveness for the
-// heartbeat reaper, a sliding frame counter for the rate limit, and the open
-// stamp for close-event durations.
-type Meta = { alive: boolean; windowStart: number; frames: number; openedAt: number };
+// heartbeat reaper, sliding frame + byte counters for the rate limit, and the
+// open stamp for close-event durations.
+type Meta = { alive: boolean; windowStart: number; frames: number; bytes: number; openedAt: number };
+
+// One incoming ws message's size, whatever shape the library delivered it in.
+const rawSize = (d: RawData): number =>
+  Array.isArray(d)
+    ? d.reduce((n, b) => n + b.length, 0)
+    : d instanceof ArrayBuffer
+      ? d.byteLength
+      : d.length;
 
 export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
   const cfg: Limits = { ...LIMITS, ...stripUndefined(opts) };
@@ -198,7 +206,7 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
     connections++;
     perIp.set(ip, (perIp.get(ip) ?? 0) + 1);
     const now = Date.now();
-    meta.set(ws, { alive: true, windowStart: now, frames: 0, openedAt: now });
+    meta.set(ws, { alive: true, windowStart: now, frames: 0, bytes: 0, openedAt: now });
     ws.on("pong", () => {
       const m = meta.get(ws);
       if (m) m.alive = true;
@@ -211,23 +219,46 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
     });
   };
 
-  // Returns true if this frame is within the per-connection rate budget; on
-  // exceed it closes the socket and returns false. A flood must cost the
-  // flooder its connection, not the relay's CPU.
-  const withinRate = (ws: WebSocket): boolean => {
+  // Returns true if this frame is within the per-connection rate budget —
+  // frames AND bytes per window (the frame count alone left rateMaxFrames ×
+  // maxPayloadBytes legal per window, gigabytes per second; 2026-07-27
+  // audit). On exceed it closes the socket and returns false. A flood must
+  // cost the flooder its connection, not the relay's CPU.
+  const withinRate = (ws: WebSocket, size: number): boolean => {
     const m = meta.get(ws);
     if (!m) return false;
     const now = Date.now();
     if (now - m.windowStart >= cfg.rateWindowMs) {
       m.windowStart = now;
       m.frames = 0;
+      m.bytes = 0;
     }
-    if (++m.frames > cfg.rateMaxFrames) {
-      log({ event: "rate_limited", frames: m.frames, windowMs: cfg.rateWindowMs });
+    m.bytes += size;
+    if (++m.frames > cfg.rateMaxFrames || (cfg.rateMaxBytes > 0 && m.bytes > cfg.rateMaxBytes)) {
+      log({ event: "rate_limited", frames: m.frames, bytes: m.bytes, windowMs: cfg.rateWindowMs });
       ws.close(CLOSE_RATE_LIMITED);
       return false;
     }
     return true;
+  };
+
+  // Send-side backpressure (2026-07-27 audit): a receiver whose socket has
+  // maxBufferedBytes queued in relay memory has stalled — a phone that
+  // stopped draining, a wedged daemon. Nothing else bounds that queue, so
+  // every other cap is theoretical without this. Close it (never drop
+  // frames — the stream must stay gapless; a re-attach replays) and skip the
+  // forward: the readyState guard at each send site keeps later frames from
+  // racing the close handshake.
+  const withinBackpressure = (receiver: WebSocket, role: "daemon" | "viewport"): boolean => {
+    if (cfg.maxBufferedBytes <= 0 || receiver.bufferedAmount <= cfg.maxBufferedBytes) return true;
+    log({
+      event: "backpressure_closed",
+      role,
+      buffered: receiver.bufferedAmount,
+      limit: cfg.maxBufferedBytes,
+    });
+    receiver.close(CLOSE_OVERLOADED);
+    return false;
   };
 
   const acceptDaemon = (ws: WebSocket, pairId: string, ip: string) => {
@@ -249,7 +280,7 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
     pairs.set(pairId, pair);
     log({ event: "daemon_paired", pairs: pairs.size, connections });
     ws.on("message", (data: RawData) => {
-      if (!withinRate(ws)) return;
+      if (!withinRate(ws, rawSize(data))) return;
       let env: DaemonToRelay;
       try {
         const parsed: unknown = JSON.parse(String(data));
@@ -266,6 +297,7 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
       // non-string (object/bool/null), and that throw here is uncaught — it
       // would kill the process. So a mistyped `p` is dropped, not forwarded.
       if (env.t === "frame" && typeof env.p === "string" && viewport?.readyState === WebSocket.OPEN) {
+        if (!withinBackpressure(viewport, "viewport")) return;
         pair.frames++;
         pair.bytes += env.p.length;
         viewport.send(env.p); // opaque — routed, never parsed
@@ -312,8 +344,9 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
     log({ event: "viewport_opened", viewports: pair.viewports.size, connections });
     pair.daemon.send(JSON.stringify({ t: "open", v } satisfies RelayToDaemon));
     ws.on("message", (data: RawData) => {
-      if (!withinRate(ws)) return;
+      if (!withinRate(ws, rawSize(data))) return;
       if (pair.daemon.readyState === WebSocket.OPEN) {
+        if (!withinBackpressure(pair.daemon, "daemon")) return;
         const p = String(data);
         pair.frames++;
         pair.bytes += p.length;

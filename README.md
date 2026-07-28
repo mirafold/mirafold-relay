@@ -77,16 +77,18 @@ All values are env-overridable (`src/limits.ts`):
 
 | env | default | meaning |
 | --- | --- | --- |
-| `RELAY_MAX_CONNECTIONS` | 2000 | hard ceiling on live sockets |
+| `RELAY_MAX_CONNECTIONS` | 256 | hard ceiling on live sockets — sized for launch scale and the machine's actual memory (2026-07-28; was 2000); raise per-deploy when real usage asks |
 | `RELAY_MAX_CONNECTIONS_PER_IP` | 64 | live sockets one source IP may hold (0 disables) |
 | `RELAY_MAX_NEW_CONNECTIONS_PER_IP` | 0 (off) | new connections one source IP may open per window before the rest are refused — bounds open/close churn the concurrent cap can't see; off by default (see note below) |
 | `RELAY_NEW_CONNECTION_WINDOW_MS` | 60000 | sliding window for the cap above (only meaningful when it's > 0) |
-| `RELAY_MAX_PAIRS` | 1000 | distinct daemons at once |
+| `RELAY_MAX_PAIRS` | 128 | distinct daemons at once (2026-07-28; was 1000) |
 | `RELAY_MAX_VIEWPORTS_PER_PAIR` | 8 | browser viewports per pair |
 | `RELAY_MAX_PAYLOAD_BYTES` | 8000000 | single-frame ceiling |
 | `RELAY_RATE_MAX_FRAMES` / `RELAY_RATE_WINDOW_MS` | 480 / 1000 | per-connection frame rate |
+| `RELAY_RATE_MAX_BYTES` | 64000000 | per-connection bytes per window (the frame cap alone left frames × payload — gigabytes/s — legal); sized so a maxed-ring attach-replay (~43 MB sealed) passes; 0 disables |
+| `RELAY_MAX_BUFFERED_BYTES` | 64000000 | send-side backpressure: a receiver whose socket buffers past this is closed `CLOSE_OVERLOADED` (a re-attach replays; nothing else bounds a stalled consumer's queue); 0 disables |
 | `RELAY_HEARTBEAT_MS` | 30000 | ws ping interval; a missed ping is reaped |
-| `RELAY_MAX_SOCKETS` | 2400 | raw TCP sockets accepted at once — the pre-handshake floor; keep ≥ `RELAY_MAX_CONNECTIONS` so the app cap bites first; 0 = unbounded |
+| `RELAY_MAX_SOCKETS` | 320 | raw TCP sockets accepted at once — the pre-handshake floor; keep ≥ `RELAY_MAX_CONNECTIONS` so the app cap bites first; 0 = unbounded (2026-07-28; was 2400) |
 | `RELAY_HEADERS_TIMEOUT_MS` | 15000 | ms to receive the full request headers before a stalled handshake is cut; 0 disables |
 | `RELAY_REQUEST_TIMEOUT_MS` | 20000 | ms to receive the whole request before a stalled handshake is cut; 0 disables |
 | `RELAY_CONNECTION_CHECK_MS` | 5000 | how often stalled handshakes are swept for the two timeouts above; 0 disables both |
@@ -180,15 +182,26 @@ events stay free of payloads and pairing ids.
 | `daemon_unpaired` | `pairs`, `durationMs`, `frames`, `bytes` | that pairing ends — traffic *volume* across its lifetime, both directions |
 | `viewport_opened` / `viewport_closed` | counts, `durationMs` | a browser joins/leaves a pairing |
 | `refused` | `role`, `reason`, `limit?`, `origin?` | any gate turns a socket away (`bad_pair_id`, `pair_cap`, `viewport_cap`, `connection_cap`, `per_ip_cap`, `per_ip_rate`, `origin`, `entitlement`) |
-| `rate_limited` | `frames`, `windowMs` | a socket exceeds the frame budget and is closed |
+| `rate_limited` | `frames`, `bytes`, `windowMs` | a socket exceeds the frame or byte budget and is closed |
+| `backpressure_closed` | `role`, `buffered`, `limit` | a receiver stalled past the send-buffer limit and is closed — queue sizes, never content |
 | `socket_error` | `message` | a ws protocol violation (the socket is closed, the process lives) |
 | `shutdown` / `crash` | `signal` / `kind`, `message` | process lifecycle |
 
 What never appears in any event, by construction: **frame payloads** (E2E
-ciphertext the relay could not read anyway), **pairing ids** (bearer secrets),
-and **client IP addresses** (IPs are counted in-memory for the DoS caps above,
-then discarded — a `refused` event says a cap fired, never who hit it). Nothing
+ciphertext the relay could not read anyway), **pairing ids**, and **client IP
+addresses** (IPs are counted in-memory for the DoS caps above, then
+discarded — a `refused` event says a cap fired, never who hit it). Nothing
 is written anywhere but stdout; the relay stores nothing.
+
+A calibration on pairing ids: the id is **not a bearer secret**. The daemon
+derives it as `b64url(SHA-256(code)[0..16))` — the pairing *code* never
+reaches the relay, and the id decrypts nothing and cannot complete the E2E
+handshake. Someone holding a pairing id can squat or flood that rendezvous
+slot (denial), not read or join the session (disclosure). It stays out of
+the relay's own logs all the same — but note the id necessarily rides the
+upgrade URL's query string, so infrastructure *in front of* the relay (a
+platform's edge proxy) may record request lines independently of this
+process. That exposure is bounded by the same calibration.
 
 ## Repository layout
 

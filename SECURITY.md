@@ -24,5 +24,16 @@ surface too, and reports about it are welcome. What the relay logs is the
 exhaustive list in the README's logging section — aggregate connection
 counts, durations, and byte totals; never client IPs, never pairing ids,
 never payloads (a test pins this). A report that shows an IP, a pairing id,
-or frame content reaching the logs — or any metadata leaving the process by
-a path the README doesn't list — counts as a bug.
+or frame content reaching **this process's own logs** — or any metadata
+leaving the process by a path the README doesn't list — counts as a bug.
+
+Two calibrations on the pairing id, so reports rank themselves accurately.
+First, it is not a credential: the daemon derives it as
+`b64url(SHA-256(code)[0..16))`, the pairing *code* never reaches the relay,
+and the id can neither decrypt a frame nor complete the E2E handshake —
+holding one enables squatting or flooding that rendezvous slot (denial),
+not reading or joining the session. Second, the id rides the upgrade URL's
+query string by design, so infrastructure in front of a deployment (a
+platform's edge proxy) may record request lines outside this process's
+control; that is a deployment-layer exposure bounded by the first
+calibration, not a bug in the relay's own logging promise.

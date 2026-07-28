@@ -28,7 +28,24 @@ export type Limits = {
   maxPayloadBytes: number;
   /** Frames one connection may send per window before it's dropped. */
   rateMaxFrames: number;
+  /** Bytes one connection may send per window before it's dropped (2026-07-27
+   * audit: the frame-count cap alone left rateMaxFrames × maxPayloadBytes —
+   * gigabytes per second — legal on a single socket). Sized so the biggest
+   * legitimate burst passes: an attach-replay of a maxed daemon ring
+   * (32 MB of messages, sealed + base64 ≈ 43 MB) must cross in one window.
+   * 0 disables. */
+  rateMaxBytes: number;
   rateWindowMs: number;
+  /** Send-side backpressure (2026-07-27 audit): bytes the relay will let one
+   * receiver's socket buffer (ws bufferedAmount) before treating it as
+   * stalled and closing it CLOSE_OVERLOADED. Without this a slow consumer —
+   * a phone that stopped draining, a wedged daemon — queues forwarded
+   * frames in relay memory without bound, so every other cap is theoretical.
+   * Closing (not dropping frames) keeps the stream gapless: the client
+   * re-attaches and replays. Sized like rateMaxBytes: a full maxed-ring
+   * replay (~43 MB) headed to a briefly-slow viewport must survive.
+   * 0 disables. */
+  maxBufferedBytes: number;
   /** ws-level ping interval; a socket that missed the last ping is reaped. 0 disables. */
   heartbeatMs: number;
   /** Raw TCP sockets the HTTP server accepts at once — a floor for the
@@ -68,17 +85,24 @@ const num = (name: string, fallback: number): number => {
 };
 
 export const LIMITS: Limits = {
-  maxConnections: num("RELAY_MAX_CONNECTIONS", 2_000),
+  // 256/320/128 (were 2000/2400/1000, 2026-07-28): launch scale needs
+  // hundreds of sockets, not thousands, and the worst-case in-flight memory
+  // the caps make legal must be sized against the actual machine (the Fly VM
+  // has no [[vm]] section — the default is small). Raise per-deploy via env
+  // when real usage asks for it.
+  maxConnections: num("RELAY_MAX_CONNECTIONS", 256),
   maxConnectionsPerIp: num("RELAY_MAX_CONNECTIONS_PER_IP", 64),
   maxNewConnectionsPerIp: num("RELAY_MAX_NEW_CONNECTIONS_PER_IP", 0),
   newConnectionWindowMs: num("RELAY_NEW_CONNECTION_WINDOW_MS", 60_000),
-  maxPairs: num("RELAY_MAX_PAIRS", 1_000),
+  maxPairs: num("RELAY_MAX_PAIRS", 128),
   maxViewportsPerPair: num("RELAY_MAX_VIEWPORTS_PER_PAIR", 8),
   maxPayloadBytes: num("RELAY_MAX_PAYLOAD_BYTES", 8_000_000),
   rateMaxFrames: num("RELAY_RATE_MAX_FRAMES", 480),
+  rateMaxBytes: num("RELAY_RATE_MAX_BYTES", 64_000_000),
   rateWindowMs: num("RELAY_RATE_WINDOW_MS", 1_000),
+  maxBufferedBytes: num("RELAY_MAX_BUFFERED_BYTES", 64_000_000),
   heartbeatMs: num("RELAY_HEARTBEAT_MS", 30_000),
-  maxSockets: num("RELAY_MAX_SOCKETS", 2_400),
+  maxSockets: num("RELAY_MAX_SOCKETS", 320),
   headersTimeoutMs: num("RELAY_HEADERS_TIMEOUT_MS", 15_000),
   requestTimeoutMs: num("RELAY_REQUEST_TIMEOUT_MS", 20_000),
   connectionCheckMs: num("RELAY_CONNECTION_CHECK_MS", 5_000),

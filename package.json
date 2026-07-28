@@ -15,6 +15,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prestart": "npm run build",
     "start": "node dist/main.js",
     "dev": "node --import tsx src/main.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
