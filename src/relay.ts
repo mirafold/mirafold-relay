@@ -31,7 +31,7 @@ import {
   type RelayToDaemon,
 } from "./contract.js";
 import { LIMITS, type Limits } from "./limits.js";
-import { stdoutLog, type RelayLog } from "./log.js";
+import { stdoutLog, type RelayEvent, type RelayLog } from "./log.js";
 
 export type RelayOptions = Partial<Limits> & {
   port?: number;
@@ -202,6 +202,17 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
   const guard = (ws: WebSocket) =>
     ws.on("error", (err: Error) => log({ event: "socket_error", message: err.message }));
 
+  // Every gate turns a socket away the same way: a metadata-only log line and
+  // a clean close, always together — never one without the other.
+  const refuse = (
+    ws: WebSocket,
+    code: number,
+    why: Omit<Extract<RelayEvent, { event: "refused" }>, "event">,
+  ) => {
+    log({ event: "refused", ...why });
+    ws.close(code);
+  };
+
   const track = (ws: WebSocket, ip: string) => {
     connections++;
     perIp.set(ip, (perIp.get(ip) ?? 0) + 1);
@@ -266,13 +277,11 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
     // dial-in is refused, never silently adopted. And no more distinct
     // pairs than the cap — a hostile flood of dial-ins can't exhaust us.
     if (pairId.length < MIN_PAIR_ID_LENGTH || pairs.has(pairId)) {
-      log({ event: "refused", role: "daemon", reason: "bad_pair_id" });
-      ws.close(CLOSE_CODE_TAKEN);
+      refuse(ws, CLOSE_CODE_TAKEN, { role: "daemon", reason: "bad_pair_id" });
       return;
     }
     if (pairs.size >= cfg.maxPairs) {
-      log({ event: "refused", role: "daemon", reason: "pair_cap", limit: cfg.maxPairs });
-      ws.close(CLOSE_OVERLOADED);
+      refuse(ws, CLOSE_OVERLOADED, { role: "daemon", reason: "pair_cap", limit: cfg.maxPairs });
       return;
     }
     track(ws, ip);
@@ -321,16 +330,18 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
   const acceptViewport = (ws: WebSocket, pairId: string, ip: string) => {
     const pair = pairs.get(pairId);
     if (!pair) {
-      log({ event: "refused", role: "viewport", reason: "bad_pair_id" });
-      ws.close(CLOSE_BAD_CODE);
+      refuse(ws, CLOSE_BAD_CODE, { role: "viewport", reason: "bad_pair_id" });
       return;
     }
     // Per-pair viewport cap: independent of the daemon's own remote-viewport
     // cap (defense in depth — a hostile relay-adjacent flood must not force
     // the daemon to fend off unbounded announcements).
     if (pair.viewports.size >= cfg.maxViewportsPerPair) {
-      log({ event: "refused", role: "viewport", reason: "viewport_cap", limit: cfg.maxViewportsPerPair });
-      ws.close(CLOSE_OVERLOADED);
+      refuse(ws, CLOSE_OVERLOADED, {
+        role: "viewport",
+        reason: "viewport_cap",
+        limit: cfg.maxViewportsPerPair,
+      });
       return;
     }
     track(ws, ip);
@@ -396,30 +407,34 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
       // be told why (the client sees a clean CLOSE_OVERLOADED, not a hangup).
       const role = isDaemon ? ("daemon" as const) : ("viewport" as const);
       if (connections >= cfg.maxConnections) {
-        log({ event: "refused", role, reason: "connection_cap", limit: cfg.maxConnections });
-        ws.close(CLOSE_OVERLOADED);
+        refuse(ws, CLOSE_OVERLOADED, { role, reason: "connection_cap", limit: cfg.maxConnections });
         return;
       }
       // Per-source gate: one host can't hold more than its share, so it can
       // neither exhaust the global budget nor squat every pair slot.
       if (cfg.maxConnectionsPerIp > 0 && (perIp.get(ip) ?? 0) >= cfg.maxConnectionsPerIp) {
-        log({ event: "refused", role, reason: "per_ip_cap", limit: cfg.maxConnectionsPerIp });
-        ws.close(CLOSE_OVERLOADED);
+        refuse(ws, CLOSE_OVERLOADED, { role, reason: "per_ip_cap", limit: cfg.maxConnectionsPerIp });
         return;
       }
       // Per-source rate gate: the concurrent cap above can't see a source that
       // opens and closes connections in a tight loop; this bounds that churn.
       if (!withinConnectRate(ip)) {
-        log({ event: "refused", role, reason: "per_ip_rate", limit: cfg.maxNewConnectionsPerIp });
-        ws.close(CLOSE_OVERLOADED);
+        refuse(ws, CLOSE_OVERLOADED, {
+          role,
+          reason: "per_ip_rate",
+          limit: cfg.maxNewConnectionsPerIp,
+        });
         return;
       }
       // Origin gate (viewports only): with an allowlist configured, a socket
       // from any other web origin is refused before it can pair. Daemons carry
       // no Origin and are never gated here.
       if (!isDaemon && !originAllowed(req)) {
-        log({ event: "refused", role, reason: "origin", origin: req.headers.origin ?? "none" });
-        ws.close(CLOSE_FORBIDDEN_ORIGIN);
+        refuse(ws, CLOSE_FORBIDDEN_ORIGIN, {
+          role,
+          reason: "origin",
+          origin: req.headers.origin ?? "none",
+        });
         return;
       }
       // Entitlement gate (daemons only): with a public key configured, a daemon
@@ -427,8 +442,7 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
       // gate. Viewports need no token; a pairing only exists behind an entitled
       // daemon, so the daemon's entitlement covers it.
       if (isDaemon && !entitled(req)) {
-        log({ event: "refused", role, reason: "entitlement" });
-        ws.close(CLOSE_UNENTITLED);
+        refuse(ws, CLOSE_UNENTITLED, { role, reason: "entitlement" });
         return;
       }
       if (isDaemon) acceptDaemon(ws, pairId, ip);

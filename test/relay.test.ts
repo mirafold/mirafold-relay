@@ -27,7 +27,7 @@ import {
   type RelayToDaemon,
 } from "../src/contract.js";
 
-const PAIR = "a-real-pair-id-22-chars";
+const PAIR = "a-real-22-char-pair-id";
 
 async function relay(opts: RelayOptions = {}): Promise<Relay> {
   return startRelay({ host: "127.0.0.1", heartbeatMs: 0, log: () => {}, ...opts });
@@ -56,6 +56,20 @@ function closeCode(ws: WebSocket): Promise<number> {
 
 function nextMessage(ws: WebSocket): Promise<string> {
   return new Promise((resolve) => ws.once("message", (d) => resolve(String(d))));
+}
+
+/** Resolves with the first envelope of type `t`, skipping any queued ahead of
+ * it — for when other traffic (a viewport closing) may arrive first. */
+function nextEnvelope(ws: WebSocket, t: string): Promise<{ t: string; v: string }> {
+  return new Promise((resolve) => {
+    const onMessage = (d: unknown) => {
+      const env = JSON.parse(String(d)) as { t: string; v: string };
+      if (env.t !== t) return;
+      ws.off("message", onMessage);
+      resolve(env);
+    };
+    ws.on("message", onMessage);
+  });
 }
 
 /** The common preamble: a daemon and one viewport paired on PAIR, resolved
@@ -108,6 +122,61 @@ test("pairs a daemon with a viewport and shuttles opaque payloads both ways", as
     const arrived = nextMessage(viewport);
     daemon.send(JSON.stringify({ t: "frame", v, p: down }));
     assert.equal(await arrived, down);
+  } finally {
+    await r.close();
+  }
+});
+
+test("routes each frame to the addressed viewport only, among several", async () => {
+  const r = await relay();
+  try {
+    const daemon = await opened(dial(r, "/daemon", PAIR));
+    const open1 = nextMessage(daemon);
+    const vp1 = await opened(dial(r, "/ws", PAIR));
+    const { v: v1 } = JSON.parse(await open1) as { v: string };
+    const open2 = nextMessage(daemon);
+    const vp2 = await opened(dial(r, "/ws", PAIR));
+    const { v: v2 } = JSON.parse(await open2) as { v: string };
+    assert.notEqual(v1, v2, "each viewport gets its own id");
+
+    // Down: a frame addressed to v2 reaches viewport 2 alone — nothing leaks
+    // to viewport 1 — and a frame for a viewport id that doesn't exist is
+    // dropped harmlessly (same-socket ordering: for-two arriving proves the
+    // stray was processed and survived).
+    const strays: string[] = [];
+    vp1.on("message", (d) => strays.push(String(d)));
+    const at2 = nextMessage(vp2);
+    daemon.send(JSON.stringify({ t: "frame", v: "no-such-v", p: "lost" }));
+    daemon.send(JSON.stringify({ t: "frame", v: v2, p: "for-two" }));
+    assert.equal(await at2, "for-two");
+    await new Promise((res) => setTimeout(res, 50)); // let any misdelivery land
+    assert.deepEqual(strays, [], "viewport 1 heard nothing");
+
+    // Up: each viewport's frames arrive tagged with its own id.
+    const up1 = nextMessage(daemon);
+    vp1.send("from-one");
+    assert.deepEqual(JSON.parse(await up1), { t: "frame", v: v1, p: "from-one" });
+    const up2 = nextMessage(daemon);
+    vp2.send("from-two");
+    assert.deepEqual(JSON.parse(await up2), { t: "frame", v: v2, p: "from-two" });
+  } finally {
+    await r.close();
+  }
+});
+
+test("a daemon-sent close envelope drops that viewport; the pairing itself survives", async () => {
+  const r = await relay();
+  try {
+    const { daemon, viewport, v } = await paired(r);
+    const dropped = closeCode(viewport);
+    const echoed = nextMessage(daemon);
+    daemon.send(JSON.stringify({ t: "close", v }));
+    assert.equal(await dropped, CLOSE_BAD_CODE, "the addressed viewport is closed");
+    // The relay's viewport-close handler then confirms the drop to the daemon…
+    assert.deepEqual(JSON.parse(await echoed), { t: "close", v });
+    // …and the pairing is intact: the daemon is up and a fresh viewport joins.
+    assert.equal(daemon.readyState, WebSocket.OPEN);
+    await opened(dial(r, "/ws", PAIR));
   } finally {
     await r.close();
   }
@@ -210,6 +279,26 @@ test("caps the RATE of new connections from one source IP (churn the concurrent 
   }
 });
 
+test("the connect-rate window resets: a refused source is admitted again once it elapses", async () => {
+  // The gate must be a brake, not a permanent lockout — the window self-resets
+  // on the next attempt after it elapses. (The heartbeat's perIpRate sweep is
+  // memory hygiene only; this reset works with the heartbeat off, as here.)
+  const r = await relay({
+    maxNewConnectionsPerIp: 2,
+    newConnectionWindowMs: 400,
+    maxConnectionsPerIp: 0,
+  });
+  try {
+    assert.equal(await closeCode(dial(r, "/ws", PAIR)), CLOSE_BAD_CODE);
+    assert.equal(await closeCode(dial(r, "/ws", PAIR)), CLOSE_BAD_CODE);
+    assert.equal(await closeCode(dial(r, "/ws", PAIR)), CLOSE_OVERLOADED); // over budget
+    await new Promise((res) => setTimeout(res, 500)); // the window elapses
+    assert.equal(await closeCode(dial(r, "/ws", PAIR)), CLOSE_BAD_CODE); // back in
+  } finally {
+    await r.close();
+  }
+});
+
 test("per-IP cap keys on the configured trusted header, and frees on close", async () => {
   const r = await relay({ maxConnectionsPerIp: 2, clientIpHeader: "x-real-ip" });
   const ONE = { "x-real-ip": "1.1.1.1" };
@@ -225,6 +314,20 @@ test("per-IP cap keys on the configured trusted header, and frees on close", asy
     v1.close();
     await new Promise((res) => setTimeout(res, 100));
     await opened(dial(r, "/ws", PAIR, ONE));
+  } finally {
+    await r.close();
+  }
+});
+
+test("the trusted client-IP header may be a comma list — the first hop is the client", async () => {
+  const r = await relay({ maxConnectionsPerIp: 1, clientIpHeader: "x-real-ip" });
+  try {
+    await opened(dial(r, "/daemon", PAIR, { "x-real-ip": "9.9.9.9, 10.0.0.1" }));
+    // The same client via a different proxy chain lands in the same bucket.
+    assert.equal(
+      await closeCode(dial(r, "/ws", PAIR, { "x-real-ip": "9.9.9.9" })),
+      CLOSE_OVERLOADED,
+    );
   } finally {
     await r.close();
   }
@@ -420,6 +523,42 @@ test("backpressure: a stalled viewport is closed CLOSE_OVERLOADED; the daemon su
   }
 });
 
+test("backpressure: a stalled DAEMON is closed too, and its orphaned viewport cascades", async () => {
+  // The mirror of the test above — the daemon is the receiver this time. Its
+  // close also proves the cascade: a pair whose daemon is dropped closes its
+  // viewports with CLOSE_BAD_CODE (they re-dial), exactly as if the daemon
+  // had left on its own.
+  const events: RelayEvent[] = [];
+  const r = await relay({
+    maxBufferedBytes: 50_000,
+    rateMaxBytes: 0,
+    rateMaxFrames: 100_000,
+    log: (e) => events.push(e),
+  });
+  try {
+    const { daemon, viewport } = await paired(r);
+    const dsock = (daemon as unknown as { _socket: { pause(): void; resume(): void } })._socket;
+    dsock.pause();
+    const daemonDropped = closeCode(daemon);
+    const cascade = closeCode(viewport);
+    const chunk = "z".repeat(512 * 1024);
+    for (let i = 0; i < 400; i++) {
+      viewport.send(chunk);
+      await new Promise((res) => setImmediate(res));
+    }
+    dsock.resume();
+    assert.equal(await daemonDropped, CLOSE_OVERLOADED, "stalled daemon is refused");
+    assert.equal(await cascade, CLOSE_BAD_CODE, "its viewport is cascade-closed");
+    const bp = events.filter((e) => e.event === "backpressure_closed") as Extract<
+      RelayEvent,
+      { event: "backpressure_closed" }
+    >[];
+    assert.equal(bp[0]?.role, "daemon", "the event names the stalled role");
+  } finally {
+    await r.close();
+  }
+});
+
 test("handshake timeouts bound the handshake only — a live WebSocket is never cut by them", async () => {
   // The pre-handshake floor must not sever an established, idle session (a
   // phone waiting between turns). Set both timeouts absurdly short, then idle a
@@ -437,6 +576,39 @@ test("handshake timeouts bound the handshake only — a live WebSocket is never 
     await r.close();
   }
 });
+
+test("heartbeat reaper: a socket that stops answering pings is terminated; live ones survive", async () => {
+  // Conforming clients pong automatically at the protocol level, so a paired
+  // session must ride out several intervals untouched. Then the viewport goes
+  // silent — its TCP socket paused, so it can never pong again — and the
+  // reaper terminates it: one interval marks it dead, the next reaps it. The
+  // daemon hears the viewport-close cascade, which is how we observe the reap.
+  const r = await relay({ heartbeatMs: 100 });
+  try {
+    const { daemon, viewport, v } = await paired(r);
+    await new Promise((res) => setTimeout(res, 350)); // several ping rounds
+    const arrived = nextMessage(viewport);
+    daemon.send(JSON.stringify({ t: "frame", v, p: "alive-across-pings" }));
+    assert.equal(await arrived, "alive-across-pings");
+
+    const reaped = nextMessage(daemon);
+    (viewport as unknown as { _socket: { pause(): void } })._socket.pause();
+    assert.deepEqual(JSON.parse(await reaped), { t: "close", v }, "zombie viewport reaped");
+    assert.equal(daemon.readyState, WebSocket.OPEN, "the answering daemon is never reaped");
+  } finally {
+    await r.close();
+  }
+});
+
+/** A raw TCP connection to the relay — no HTTP, no WebSocket — resolved once
+ * it is established. For the pre-handshake-floor tests below. */
+function rawConnect(port: number): Promise<net.Socket> {
+  return new Promise((res, rej) => {
+    const sock = net.connect(port, "127.0.0.1");
+    sock.once("connect", () => res(sock));
+    sock.once("error", rej);
+  });
+}
 
 // Resolves true once the socket closes/errors (server dropped it), false on
 // timeout. Always destroys the socket, so it can never linger and hang close().
@@ -461,11 +633,7 @@ test("a slowloris that never completes its headers is dropped (pre-handshake flo
   // Short headers timeout + a tight check interval so the sweep reaps it fast.
   const r = await relay({ headersTimeoutMs: 100, connectionCheckMs: 30 });
   try {
-    const sock = net.connect(r.port, "127.0.0.1");
-    await new Promise<void>((res, rej) => {
-      sock.once("connect", () => res());
-      sock.once("error", rej);
-    });
+    const sock = await rawConnect(r.port);
     // A partial request the server can never finish parsing — the header block
     // is deliberately left unterminated (no closing blank line). Without the
     // headers timeout this half-open socket would park a slot indefinitely.
@@ -478,18 +646,32 @@ test("a slowloris that never completes its headers is dropped (pre-handshake flo
 
 test("caps raw TCP sockets past maxSockets (the self-host connection floor)", async () => {
   const r = await relay({ maxSockets: 1 });
-  const first = net.connect(r.port, "127.0.0.1");
+  let first: net.Socket | undefined;
   try {
-    await new Promise<void>((res, rej) => {
-      first.once("connect", () => res());
-      first.once("error", rej);
-    });
+    first = await rawConnect(r.port);
     // With one raw socket already held and maxSockets = 1, the server accepts
     // then immediately drops the next one — enforced at accept, no timeout wait.
     const second = net.connect(r.port, "127.0.0.1");
     assert.ok(await droppedWithin(second, 2000), "second raw socket refused past maxSockets");
   } finally {
-    first.destroy();
+    first?.destroy();
+    await r.close();
+  }
+});
+
+test("an upgrade on an unknown path is destroyed outright", async () => {
+  // The upgrade handler only knows /daemon and /ws; anything else is dropped
+  // pre-handshake (socket.destroy), the same fate as an unparseable target.
+  const r = await relay();
+  try {
+    const sock = await rawConnect(r.port);
+    sock.write(
+      `GET /nope?pair=${PAIR} HTTP/1.1\r\nHost: relay\r\nUpgrade: websocket\r\n` +
+        `Connection: Upgrade\r\nSec-WebSocket-Key: AAAAAAAAAAAAAAAAAAAAAA==\r\n` +
+        `Sec-WebSocket-Version: 13\r\n\r\n`,
+    );
+    assert.ok(await droppedWithin(sock, 2000), "unknown-path upgrade dropped");
+  } finally {
     await r.close();
   }
 });
@@ -543,6 +725,142 @@ test("malformed daemon frames — bad envelopes and non-string payloads — are 
     daemon.send(JSON.stringify({ t: "frame", v, p: "still-alive" }));
     assert.equal(await arrived, "still-alive");
     assert.equal(daemon.readyState, WebSocket.OPEN);
+  } finally {
+    await r.close();
+  }
+});
+
+// A seeded PRNG (mulberry32) so the fuzz below is random-looking but the SAME
+// every run: a failure is reproducible from the seed alone, and CI can never
+// go red for a case that vanishes on re-run. Hand-rolled on purpose — a
+// property-testing dependency would be a whole transitive tree for twelve
+// lines we can own safely.
+function rng(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const pick = <T>(rand: () => number, xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)]!;
+
+test("fuzz: seeded random malformed envelopes never kill the relay (200 cases)", async () => {
+  // The daemon envelope is one of only two attacker-controlled parse surfaces,
+  // and BOTH of this relay's process-killing crashes lived here (a non-object
+  // that still parses; a `p` that isn't a string). Those exact classes are
+  // pinned by name above; this throws structured garbage at the same handler
+  // to catch the next variant before an audit has to. Rate caps are lifted so
+  // the flood itself isn't what ends the socket.
+  const rand = rng(0x5eed_1);
+  const r = await relay({ rateMaxFrames: 1_000_000, rateMaxBytes: 0 });
+  try {
+    const { daemon, v } = await paired(r);
+    const types = ["frame", "close", "pong", "open", "ping", "", "FRAME", 0, null, undefined, {}];
+    const payloads = [
+      "ok",
+      "",
+      0,
+      -1,
+      1e999,
+      true,
+      false,
+      null,
+      undefined,
+      {},
+      { nested: { deep: 1 } },
+      [],
+      ["a"],
+      " ￿",
+      "🙈".repeat(4),
+    ];
+    const viewportIds = [v, "", "no-such-v", "../..", 0, null, undefined, {}, [v]];
+
+    for (let i = 0; i < 200; i++) {
+      // Half well-formed-ish envelopes with fuzzed fields, half raw junk text —
+      // the JSON.parse guard and the field guards each need their own pressure.
+      if (rand() < 0.5) {
+        const env: Record<string, unknown> = {
+          t: pick(rand, types),
+          v: pick(rand, viewportIds),
+          p: pick(rand, payloads),
+        };
+        if (rand() < 0.2) delete env[pick(rand, ["t", "v", "p"] as const)];
+        if (rand() < 0.15) env[`x${i}`] = pick(rand, payloads); // unknown extra field
+        daemon.send(JSON.stringify(env));
+      } else {
+        const junk = [
+          "",
+          "{",
+          "}",
+          "[",
+          "null",
+          "true",
+          "0",
+          '"str"',
+          "{'t':1}",
+          "{}{}",
+          " ",
+          "NaN",
+          "Infinity",
+          '{"t":"frame","v":"' + v + '","p":',
+          "not json at all",
+        ];
+        daemon.send(pick(rand, junk));
+      }
+    }
+
+    // The original viewport may be gone — a fuzzed {t:"close", v} is legal
+    // routing, not a crash — so survival is proved with a FRESH viewport.
+    // Same-socket ordering still holds: the daemon socket processes all 200
+    // cases before the frame below, so its arrival proves none was fatal.
+    const announced = nextEnvelope(daemon, "open");
+    const viewport2 = await opened(dial(r, "/ws", PAIR));
+    const { v: v2 } = await announced;
+    const arrived = nextMessage(viewport2);
+    daemon.send(JSON.stringify({ t: "frame", v: v2, p: "survived-the-fuzz" }));
+    assert.equal(await arrived, "survived-the-fuzz");
+    assert.equal(daemon.readyState, WebSocket.OPEN, "the daemon socket is still open");
+    // And the relay is healthy for everyone else, not just this pairing.
+    assert.equal((await fetch(`http://127.0.0.1:${r.port}/health`)).status, 200);
+  } finally {
+    await r.close();
+  }
+});
+
+test("fuzz: seeded random upgrade targets never kill the relay (60 cases)", async () => {
+  // The second parse surface: `new URL(req.url, …)` in the upgrade handler,
+  // where `//[` once threw ERR_INVALID_URL and exited the process. Characters
+  // are drawn from a set Node's HTTP parser passes THROUGH (no space, no
+  // control bytes — those are rejected before our handler, proving nothing).
+  // Each socket is expected to be dropped; what's under test is that the
+  // relay is still routing afterward.
+  const rand = rng(0x5eed_2);
+  const events: RelayEvent[] = [];
+  const r = await relay({ log: (e) => events.push(e) });
+  try {
+    const daemon = await opened(dial(r, "/daemon", PAIR)); // must survive it all
+    const chars = "/[]%:@?#&=.-_~+abZ019{}|\\^`<>\"'()*,;$!".split("");
+    for (let i = 0; i < 60; i++) {
+      let target = "/";
+      const len = 1 + Math.floor(rand() * 12);
+      for (let c = 0; c < len; c++) target += pick(rand, chars);
+      const sock = await rawConnect(r.port);
+      sock.write(
+        `GET ${target} HTTP/1.1\r\nHost: relay\r\nUpgrade: websocket\r\n` +
+          `Connection: Upgrade\r\nSec-WebSocket-Key: AAAAAAAAAAAAAAAAAAAAAA==\r\n` +
+          `Sec-WebSocket-Version: 13\r\n\r\n`,
+      );
+      assert.ok(await droppedWithin(sock, 2000), `target dropped: ${target}`);
+    }
+
+    // No crash event, the existing pairing is intact, and new sockets still pair.
+    assert.equal(events.filter((e) => e.event === "crash").length, 0);
+    assert.equal(daemon.readyState, WebSocket.OPEN, "existing pairing survived");
+    const viewport = await opened(dial(r, "/ws", PAIR));
+    assert.equal(viewport.readyState, WebSocket.OPEN, "relay still accepts new sockets");
   } finally {
     await r.close();
   }
@@ -666,6 +984,28 @@ test("structured log: refusals name the reason (bad pair id, both roles)", async
   }
 });
 
+test("structured log: a rate-limited flood logs its budget numbers, never content", async () => {
+  const events: RelayEvent[] = [];
+  const r = await relay({ rateMaxFrames: 3, rateWindowMs: 60_000, log: (e) => events.push(e) });
+  try {
+    const { viewport } = await paired(r);
+    const dropped = closeCode(viewport);
+    for (let i = 0; i < 4; i++) viewport.send("SECRET-flood-x"); // 4th trips the cap of 3
+    assert.equal(await dropped, CLOSE_RATE_LIMITED);
+    const rl = events.filter((e) => e.event === "rate_limited") as Extract<
+      RelayEvent,
+      { event: "rate_limited" }
+    >[];
+    assert.equal(rl.length, 1);
+    assert.equal(rl[0]?.frames, 4);
+    assert.equal(rl[0]?.windowMs, 60_000);
+    assert.ok((rl[0]?.bytes ?? 0) > 0, "byte volume, not content");
+    assert.ok(!JSON.stringify(events).includes("SECRET"), "no payload in events");
+  } finally {
+    await r.close();
+  }
+});
+
 test("a request target Node accepts but WHATWG URL rejects can't kill the relay", async () => {
   // Node's HTTP parser passes `//[` straight through to the upgrade handler,
   // where `new URL(target, "ws://relay")` throws ERR_INVALID_URL. Uncaught,
@@ -683,11 +1023,7 @@ test("a request target Node accepts but WHATWG URL rejects can't kill the relay"
     // before the handler ever runs, so it proves nothing about this guard.)
     const targets = ["//[", "//]", "//%", "//[::1", "//%zz"];
     for (const target of targets) {
-      const sock = net.connect(r.port, "127.0.0.1");
-      await new Promise<void>((res, rej) => {
-        sock.once("connect", () => res());
-        sock.once("error", rej);
-      });
+      const sock = await rawConnect(r.port);
       sock.write(
         `GET ${target} HTTP/1.1\r\nHost: relay\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n`,
       );

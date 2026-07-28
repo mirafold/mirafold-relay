@@ -170,6 +170,23 @@ MIRAFOLD_RELAY_URL=wss://genui-relay-staging.fly.dev mirafold
 # 4. Same workflow, same ref, environment = production
 ```
 
+**Load-testing the caps (R.6) belongs here, on staging — never production.**
+
+```
+npm run load -- wss://genui-relay-staging.fly.dev
+```
+
+It ramps connections until one is refused, floods a socket past the frame and
+byte budgets, and parks half-open handshakes against the pre-handshake floor,
+reporting which cap fired at what threshold. A clean `4xxx` close is the pass
+signal — the relay refuses rather than degrades. The client can't tell the
+three capacity caps apart (all close `4004`), so read `fly logs -a
+genui-relay-staging` alongside it: the `refused` event names the reason. Note
+the slowloris phase self-skips over TLS (behind Fly's edge it would measure
+the edge, not this process) — that phase is meaningful on a plain-`ws`
+self-host deploy. Re-run it after any cap retune or machine resize and compare
+the numbers; that comparison is why it's a script and not a one-off.
+
 Tokens: each GitHub Environment (staging, production) holds its own
 `FLY_API_TOKEN`, minted app-scoped with `fly tokens create deploy -a <app>`
 — staging's token cannot touch production and vice versa. One-time setup
