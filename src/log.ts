@@ -27,6 +27,10 @@ export type RelayEvent =
   | { event: "viewport_opened"; viewports: number; connections: number }
   | { event: "viewport_closed"; viewports: number; durationMs: number }
   | { event: "refused"; role: "daemon" | "viewport"; reason: RefusalReason; limit?: number; origin?: string }
+  // A request target Node's HTTP parser accepted but WHATWG URL won't parse.
+  // Carries no role (the path is what we failed to read) and never the target
+  // itself — it's attacker-controlled text.
+  | { event: "bad_request_target" }
   | { event: "rate_limited"; frames: number; windowMs: number }
   | { event: "socket_error"; message: string }
   | { event: "shutdown"; signal: string }

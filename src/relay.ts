@@ -335,7 +335,21 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
   };
 
   server.on("upgrade", (req, socket, head) => {
-    const url = new URL(req.url ?? "/", "ws://relay");
+    // Node's HTTP parser hands the request target through largely unvalidated,
+    // and `new URL` throws on plenty of targets it accepts — `GET //[` is
+    // enough (verified 2026-07-27, ERR_INVALID_URL). An uncaught throw in this
+    // handler reaches main.ts's uncaughtException, which exits the process, and
+    // we run single-instance by design: one malformed request line from anyone
+    // on the internet would drop EVERY live pairing. Treat an unparseable
+    // target exactly like an unknown path — destroy the socket, stay up.
+    let url: URL;
+    try {
+      url = new URL(req.url ?? "/", "ws://relay");
+    } catch {
+      log({ event: "bad_request_target" });
+      socket.destroy();
+      return;
+    }
     const pairId = url.searchParams.get(PAIR_PARAM) ?? "";
     const isDaemon = url.pathname === DAEMON_PATH;
     if (!isDaemon && url.pathname !== VIEWPORT_PATH) {

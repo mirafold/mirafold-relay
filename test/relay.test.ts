@@ -613,3 +613,44 @@ test("structured log: refusals name the reason (bad pair id, both roles)", async
     await r.close();
   }
 });
+
+test("a request target Node accepts but WHATWG URL rejects can't kill the relay", async () => {
+  // Node's HTTP parser passes `//[` straight through to the upgrade handler,
+  // where `new URL(target, "ws://relay")` throws ERR_INVALID_URL. Uncaught,
+  // that reaches main.ts's uncaughtException handler and exits the process —
+  // and we run single-instance, so one malformed request line from anyone on
+  // the internet would drop EVERY live pairing (2026-07-27 audit, verified).
+  const events: RelayEvent[] = [];
+  const r = await relay({ log: (e) => events.push(e) });
+  try {
+    // A pairing that must SURVIVE the hostile request below.
+    const daemon = await opened(dial(r, "/daemon", PAIR));
+
+    // Each of these is accepted by the HTTP parser and rejected by `new URL`.
+    // (A target with a space — `//a b` — is NOT a probe: the parser refuses it
+    // before the handler ever runs, so it proves nothing about this guard.)
+    const targets = ["//[", "//]", "//%", "//[::1", "//%zz"];
+    for (const target of targets) {
+      const sock = net.connect(r.port, "127.0.0.1");
+      await new Promise<void>((res, rej) => {
+        sock.once("connect", () => res());
+        sock.once("error", rej);
+      });
+      sock.write(
+        `GET ${target} HTTP/1.1\r\nHost: relay\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n`,
+      );
+      assert.ok(await droppedWithin(sock, 2000), `unparseable target dropped: ${target}`);
+    }
+
+    assert.equal(events.filter((e) => e.event === "bad_request_target").length, targets.length);
+    // The relay is still up and still routing: the pairing above is intact and
+    // a fresh viewport can still reach it.
+    assert.equal(daemon.readyState, WebSocket.OPEN, "existing pairing survived");
+    const viewport = await opened(dial(r, "/ws", PAIR));
+    assert.equal(viewport.readyState, WebSocket.OPEN, "relay still accepts new sockets");
+    viewport.close();
+    daemon.close();
+  } finally {
+    await r.close();
+  }
+});
