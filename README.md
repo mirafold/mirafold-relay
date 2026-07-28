@@ -217,6 +217,9 @@ test/             standalone suite (node:test + tsx, raw ws clients)
 scripts/smoke.mjs post-deploy go/no-go against the live relay
 scripts/load.mjs  load harness: proves the caps bite on real hardware —
                   run against staging, never production
+scripts/deployed.mjs
+                  what is actually running (per environment) and whether it
+                  is behind main — measured off the live image, not a doc
 scripts/entitlement.mjs
                   entitlement keypair + token ops: generate / mint / verify
 Dockerfile        multi-stage, npm ci, runs as the unprivileged node user

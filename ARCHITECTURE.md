@@ -72,6 +72,7 @@ Small on purpose — one runtime dependency (`ws`), five source files.
 | `test/relay.test.ts` | Standalone suite (node:test + tsx, raw `ws` clients). Pins routing, every refusal code, and every cap. Runs with no genui-shell checkout. |
 | `scripts/smoke.mjs` | Post-deploy go/no-go against a *live* relay URL. Plain Node, zero deps beyond `ws`. |
 | `scripts/load.mjs` | Load harness: ramps connections, floods frames/bytes, parks slowloris handshakes, and reports which cap fired at what threshold. Run by hand against **staging** — the caps are machine-sized, so only the deployed VM's numbers mean anything. |
+| `scripts/deployed.mjs` | `npm run deployed` — prints, per environment, the Fly release and the commit the **live image** was built from (the `GH_SHA` label the deploy workflow stamps), plus how it compares to `origin/main`. The answer to "what's running?" is read off the running machine; a planning document is history and cannot know. |
 | `scripts/entitlement.mjs` | Entitlement keypair + token ops (R.5): `generate` / `mint` / `verify`. Plain Node, `node:crypto` only. |
 | `Dockerfile` / `fly.toml` | Deploy: multi-stage build, unprivileged runtime user; single Fly.io instance with a `/health` check. |
 
