@@ -209,12 +209,19 @@ process. That exposure is bounded by the same calibration.
 src/contract.ts   the routing envelope + close codes (mirrors mirafold's
                   server/relay/relay-protocol.ts; a contract-guard test there fails on drift)
 src/limits.ts     the env-tuned DoS caps above
+src/log.ts        the structured, metadata-only log schema ("What the relay
+                  logs" above) + the stdout JSON-lines logger
 src/relay.ts      startRelay() — the whole forwarder
 src/main.ts       container entrypoint; drains on SIGTERM
 test/             standalone suite (node:test + tsx, raw ws clients)
 scripts/smoke.mjs post-deploy go/no-go against the live relay
+scripts/load.mjs  load harness: proves the caps bite on real hardware —
+                  run against staging, never production
+scripts/entitlement.mjs
+                  entitlement keypair + token ops: generate / mint / verify
 Dockerfile        multi-stage, npm ci, runs as the unprivileged node user
 fly.toml          single instance, /health check, auto_stop_machines=false
+fly.staging.toml  the staging app's config (DEPLOY.md's staging runbook)
 ARCHITECTURE.md   ground-up design: vocabulary, frame-routing flows, decisions
 DEPLOY.md         the deploy-day runbook, command by command
 ```
@@ -238,7 +245,7 @@ Point a daemon at it: `MIRAFOLD_RELAY_URL=ws://localhost:8080 mirafold`.
 
 The deeper cross-repo check — a real daemon driving a full remote turn through
 this service — lives in genui-shell: `yarn test:server` runs
-`server/relay/relay-service.itest.ts` (9 tests) against this code.
+`server/relay/relay-service.itest.ts` (12 tests) against this code.
 
 ## Deploy
 

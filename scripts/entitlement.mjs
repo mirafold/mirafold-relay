@@ -13,8 +13,8 @@
 //     the OPS/EMERGENCY hand-issued path (set as MIRAFOLD_ENTITLEMENT_TOKEN;
 //     also feeds smoke's RELAY_ENTITLEMENT_TOKEN). NOT a tester channel —
 //     beta testers pay real subscriptions and get keys via /pay, never
-//     minted tokens (Kyle's rule, 2026-07-23). The private key is
-//     read from the environment, never argv, so it can't land in shell history.
+//     minted tokens. The private key is read from the environment, never
+//     argv, so it can't land in shell history.
 //     TTL forms: 90m, 48h, 7d, or bare seconds. Default 48h.
 //
 //   … mint --ttl 48h | RELAY_ENTITLEMENT_PUBLIC_KEY=… node scripts/entitlement.mjs verify

@@ -20,7 +20,8 @@
     "dev": "node --import tsx src/main.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "load": "node scripts/load.mjs"
   },
   "dependencies": {
     "ws": "^8.21.0"

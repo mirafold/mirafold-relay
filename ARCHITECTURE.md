@@ -67,9 +67,12 @@ Small on purpose — one runtime dependency (`ws`), five source files.
 | `src/relay.ts` | The whole forwarder: `startRelay()` builds the HTTP+WS server, the routing tables, the caps, and the heartbeat. Everything of substance is here. |
 | `src/contract.ts` | The routing contract — envelope types, URL paths, close codes, the minimum pair-id length. A **hand-kept mirror** of genui-shell's `server/relay/relay-protocol.ts`; see §6. |
 | `src/limits.ts` | The DoS caps as an env-overridable `Limits` object. Pure config, no logic. |
+| `src/log.ts` | The structured, metadata-only event schema (`RelayEvent`) and the stdout JSON-lines logger — the typed half of README's "What the relay logs" claim. |
 | `src/main.ts` | The container entrypoint (`node dist/main.js`): reads env, calls `startRelay()`, drains on `SIGTERM`/`SIGINT`, and exits loudly on an uncaught error so the platform restarts it. |
 | `test/relay.test.ts` | Standalone suite (node:test + tsx, raw `ws` clients). Pins routing, every refusal code, and every cap. Runs with no genui-shell checkout. |
 | `scripts/smoke.mjs` | Post-deploy go/no-go against a *live* relay URL. Plain Node, zero deps beyond `ws`. |
+| `scripts/load.mjs` | Load harness: ramps connections, floods frames/bytes, parks slowloris handshakes, and reports which cap fired at what threshold. Run by hand against **staging** — the caps are machine-sized, so only the deployed VM's numbers mean anything. |
+| `scripts/entitlement.mjs` | Entitlement keypair + token ops (R.5): `generate` / `mint` / `verify`. Plain Node, `node:crypto` only. |
 | `Dockerfile` / `fly.toml` | Deploy: multi-stage build, unprivileged runtime user; single Fly.io instance with a `/health` check. |
 
 The public API of the module is exactly three things exported from `relay.ts`:
@@ -267,16 +270,17 @@ than degraded*. All values live in `src/limits.ts` and are env-overridable so
 they can be tuned without a redeploy (see the README hardening table for the env
 names and defaults). The mechanisms, and what each stops:
 
-- **Global connection cap** (`maxConnections`, 2000) and **pair cap**
-  (`maxPairs`, 1000) — ceilings on total live sockets and distinct daemons.
-- **Per-IP connection cap** (`maxConnectionsPerIp`, 64) — the floor that stops
+- **Global connection cap** (`maxConnections`) and **pair cap** (`maxPairs`) —
+  ceilings on total live sockets and distinct daemons, sized to the actual
+  machine and raised per-deploy via env.
+- **Per-IP connection cap** (`maxConnectionsPerIp`) — the floor that stops
   *one* host from eating the whole global budget with many quiet connections, or
   squatting every pair slot with junk daemons. The per-*connection* frame-rate
   limit can't stop that (the attack is many idle connections, not one noisy
   one), which is exactly why this cap exists. It keys on the trusted client IP
   (§5). `0` disables it. (Added from the 2026-07-08 security audit, finding #1.)
 - **Per-IP connection-*rate* cap** (`maxNewConnectionsPerIp`, off by default;
-  window `newConnectionWindowMs`, 60 s) — the complement to the concurrent cap
+  window `newConnectionWindowMs`) — the complement to the concurrent cap
   above: a source that opens and closes connections in a tight loop never
   raises its concurrent count, so that cap never fires, yet the churn still
   costs handshake work. This bounds new connections per source per window,
@@ -286,21 +290,21 @@ names and defaults). The mechanisms, and what each stops:
   with a generous value once real reconnect rates are known, like the origin
   and entitlement gates. Windows are swept in the heartbeat so the per-IP map
   holds only recently-seen sources.
-- **Per-connection frame-rate limit** (`rateMaxFrames`/`rateWindowMs`, 480 per
-  second) — a flooder loses its own connection (`CLOSE_RATE_LIMITED`, 4008), not
+- **Per-connection frame-rate limit** (`rateMaxFrames` per `rateWindowMs`) —
+  a flooder loses its own connection (`CLOSE_RATE_LIMITED`, 4008), not
   the relay's CPU. Implemented as a sliding window in `withinRate()`.
-- **Max payload** (`maxPayloadBytes`, 8 MB) — enforced by `ws` itself; an
+- **Max payload** (`maxPayloadBytes`) — enforced by `ws` itself; an
   oversize frame closes that sender with the standard 1009. A `guard()` error
   handler on *every* accepted socket ensures such a protocol violation logs and
   closes the one socket instead of throwing an uncaught error that would crash
   the whole process (which would drop *every* pairing). This guard is
   load-bearing — do not remove it.
-- **Heartbeat reaper** (`heartbeatMs`, 30 s) — WebSocket-level ping to every
+- **Heartbeat reaper** (`heartbeatMs`) — WebSocket-level ping to every
   socket each interval; one that missed the previous ping (dead TCP, a sleeping
   phone that never sent a FIN) is `terminate()`d so it can't park a slot
   forever. `0` disables it (the tests disable it to stay deterministic).
-- **Pre-handshake floor** (`maxSockets` 2400, `headersTimeoutMs` 15 s,
-  `requestTimeoutMs` 20 s, swept every `connectionCheckMs` 5 s — added
+- **Pre-handshake floor** (`maxSockets`, `headersTimeoutMs`,
+  `requestTimeoutMs`, swept every `connectionCheckMs` — added
   2026-07-13, audit finding B3). Every cap above is enforced *after* the
   WebSocket handshake, so raw TCP / half-open sockets that never upgrade were
   bounded only by Node's defaults — fine behind Fly's edge, no floor on the
@@ -346,7 +350,11 @@ The single source of truth for status and next steps is **genui-shell's
   entitlement gate awaits its key. Still owed: the Stripe Checkout +
   token-minting backend, and `RELAY_ENTITLEMENT_PUBLIC_KEY` at deploy.
 - **R.6** load-tests the caps on real hardware (including a slowloris flood
-  against the new pre-handshake floor).
+  against the new pre-handshake floor). The harness for it is
+  `scripts/load.mjs` (`npm run load -- <staging-url>`): it ramps connections,
+  floods frames and bytes, parks half-open handshakes, and reports which cap
+  fired at what threshold — re-run it after any cap retune or machine resize
+  and compare the numbers.
 
 Do not duplicate that plan here; read it there.
 
