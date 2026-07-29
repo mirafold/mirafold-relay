@@ -70,14 +70,20 @@ async function drift(sha) {
     return { known: false, note: `commit ${sha.slice(0, 7)} not in this checkout — fetch it` };
   }
   const subject = await sh("git", ["log", "-1", "--format=%s", sha]);
-  const behind = await sh("git", ["rev-list", "--count", `${sha}..origin/main`]);
-  const files = behind === "0" ? "" : await sh("git", ["diff", "--name-only", sha, "origin/main"]);
+  const behind = Number(await sh("git", ["rev-list", "--count", `${sha}..origin/main`]));
+  // ahead: commits the live image has that origin/main does NOT — the deploy
+  // workflow dispatches any ref, and the staging flow deploys pre-merge refs,
+  // so "behind 0" alone must never read as "up to date" (2026-07-29 bughunt:
+  // an unmerged deployed branch did exactly that).
+  const ahead = Number(await sh("git", ["rev-list", "--count", `origin/main..${sha}`]));
+  const files =
+    behind === 0 && ahead === 0 ? "" : await sh("git", ["diff", "--name-only", sha, "origin/main"]);
   const changed = files ? files.split("\n") : [];
   // src/ is the only path that reaches the running container's behavior —
   // test/, scripts/ and the docs ship nothing. That distinction is the whole
   // point: it turns "what's deployed" into "should I deploy".
   const functional = changed.filter((f) => f.startsWith("src/"));
-  return { known: true, sha, subject, behind: Number(behind), changed, functional };
+  return { known: true, sha, subject, behind, ahead, changed, functional };
 }
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -113,8 +119,17 @@ for (const { label, app } of ENVIRONMENTS) {
   }
   console.log(`${label.padEnd(11)} ${version.padEnd(5)} ${d.sha.slice(0, 7)}  ${d.subject}`);
   console.log(`${" ".repeat(11)} deployed ${when}`);
+  if (d.ahead > 0) {
+    // Not folded into the behind/functional verdict below: "ahead" means main
+    // LACKS live code, so deploying main would silently roll it back.
+    console.log(
+      `${" ".repeat(11)} ${plural(d.ahead, "commit")} ahead of origin/main —` +
+        ` the live image runs code main does not have (deployed from an unmerged ref);` +
+        ` merge it or a main deploy will roll it back`,
+    );
+  }
   if (d.behind === 0) {
-    console.log(`${" ".repeat(11)} up to date with origin/main`);
+    if (d.ahead === 0) console.log(`${" ".repeat(11)} up to date with origin/main`);
   } else if (d.functional.length === 0) {
     console.log(
       `${" ".repeat(11)} ${plural(d.behind, "commit")} behind origin/main —` +

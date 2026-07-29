@@ -293,7 +293,9 @@ names and defaults). The mechanisms, and what each stops:
   holds only recently-seen sources.
 - **Per-connection frame-rate limit** (`rateMaxFrames` per `rateWindowMs`) —
   a flooder loses its own connection (`CLOSE_RATE_LIMITED`, 4008), not
-  the relay's CPU. Implemented as a sliding window in `withinRate()`.
+  the relay's CPU. Implemented as a fixed (tumbling) window in `withinRate()` —
+  a burst straddling a window boundary can briefly see up to 2× the budget,
+  which the caps' sizing already tolerates.
 - **Max payload** (`maxPayloadBytes`) — enforced by `ws` itself; an
   oversize frame closes that sender with the standard 1009. A `guard()` error
   handler on *every* accepted socket ensures such a protocol violation logs and
@@ -374,3 +376,9 @@ Do not duplicate that plan here; read it there.
 - **NAT'd populations may trip the per-IP cap** — an office behind one public IP
   shares one bucket. The cap is env-tunable for exactly this; R.6 load-testing
   will confirm the default of 64 is right.
+- **The churn-gate's per-IP map is swept only by the heartbeat.** Running with
+  `RELAY_HEARTBEAT_MS=0` *and* `RELAY_MAX_NEW_CONNECTIONS_PER_IP` > 0 would grow
+  that map by one entry per distinct source IP, never freed. Both knobs are
+  non-default (the gate ships off, the heartbeat on), so this needs a deliberate
+  config combination nothing runs — accepted 2026-07-29 rather than adding sweep
+  code for it.

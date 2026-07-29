@@ -70,7 +70,10 @@ export type Relay = {
 };
 
 // openedAt/frames/bytes feed the daemon_unpaired volume event — counts of the
-// opaque traffic forwarded, both directions, never its content.
+// opaque traffic forwarded, both directions, never its content. `bytes` sums
+// payload STRING LENGTH (UTF-16 code units): identical to bytes for the
+// base64/JSON text real clients send, and not worth an extra full scan of
+// every payload (Buffer.byteLength) on the forwarding path to make exact.
 type Pair = {
   daemon: WebSocket;
   viewports: Map<string, WebSocket>;
@@ -80,9 +83,18 @@ type Pair = {
 };
 
 // Per-socket bookkeeping the ws library doesn't give us: liveness for the
-// heartbeat reaper, sliding frame + byte counters for the rate limit, and the
-// open stamp for close-event durations.
-type Meta = { alive: boolean; windowStart: number; frames: number; bytes: number; openedAt: number };
+// heartbeat reaper, windowed frame + byte counters for the rate limit, the
+// open stamp for close-event durations, and capClosed — a latch set when a
+// cap closes the socket, so frames still arriving during the close handshake
+// can't re-log the event or slip through on a window rollover.
+type Meta = {
+  alive: boolean;
+  windowStart: number;
+  frames: number;
+  bytes: number;
+  openedAt: number;
+  capClosed: boolean;
+};
 
 // One incoming ws message's size, whatever shape the library delivered it in.
 const rawSize = (d: RawData): number =>
@@ -100,7 +112,7 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
   const pairs = new Map<string, Pair>();
   const meta = new WeakMap<WebSocket, Meta>();
   const perIp = new Map<string, number>();
-  // Per-IP sliding window of new-connection attempts (the churn gate, distinct
+  // Per-IP fixed window of new-connection attempts (the churn gate, distinct
   // from perIp's concurrent count). Unlike perIp it is NOT freed when an IP's
   // sockets close — the whole point is to remember attempts across the window
   // even after they disconnect — so stale entries are swept in the heartbeat.
@@ -217,7 +229,7 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
     connections++;
     perIp.set(ip, (perIp.get(ip) ?? 0) + 1);
     const now = Date.now();
-    meta.set(ws, { alive: true, windowStart: now, frames: 0, bytes: 0, openedAt: now });
+    meta.set(ws, { alive: true, windowStart: now, frames: 0, bytes: 0, openedAt: now, capClosed: false });
     ws.on("pong", () => {
       const m = meta.get(ws);
       if (m) m.alive = true;
@@ -238,6 +250,12 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
   const withinRate = (ws: WebSocket, size: number): boolean => {
     const m = meta.get(ws);
     if (!m) return false;
+    // Closing is a handshake, not a cut: frames the flooder already sent keep
+    // arriving until the close completes, and each one lands back here. The
+    // latch keeps that tail from logging once per frame (a 50-frame flood past
+    // a cap of 3 emitted 47 rate_limited lines — 2026-07-29 bughunt) and from
+    // forwarding again if the rate window rolls over mid-close.
+    if (m.capClosed) return false;
     const now = Date.now();
     if (now - m.windowStart >= cfg.rateWindowMs) {
       m.windowStart = now;
@@ -246,6 +264,7 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
     }
     m.bytes += size;
     if (++m.frames > cfg.rateMaxFrames || (cfg.rateMaxBytes > 0 && m.bytes > cfg.rateMaxBytes)) {
+      m.capClosed = true;
       log({ event: "rate_limited", frames: m.frames, bytes: m.bytes, windowMs: cfg.rateWindowMs });
       ws.close(CLOSE_RATE_LIMITED);
       return false;
@@ -262,6 +281,12 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
   // racing the close handshake.
   const withinBackpressure = (receiver: WebSocket, role: "daemon" | "viewport"): boolean => {
     if (cfg.maxBufferedBytes <= 0 || receiver.bufferedAmount <= cfg.maxBufferedBytes) return true;
+    // Same latch as withinRate: the sender keeps pumping while the receiver's
+    // close handshake runs, and the buffer can't drain below the limit on a
+    // closing socket — without the latch every one of those frames re-logs.
+    const m = meta.get(receiver);
+    if (m?.capClosed) return false;
+    if (m) m.capClosed = true;
     log({
       event: "backpressure_closed",
       role,

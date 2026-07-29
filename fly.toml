@@ -8,7 +8,7 @@
 #                               # TWO machines; pair affinity needs exactly one
 #                               # (fix after the fact: fly scale count 1)
 #   fly certs add relay.<your-domain>   # TLS is terminated by the platform
-# Point the daemon at it with GENUI_RELAY_URL=wss://relay.<your-domain>
+# Point the daemon at it with MIRAFOLD_RELAY_URL=wss://relay.<your-domain>
 
 app = "genui-relay"
 primary_region = "iad"

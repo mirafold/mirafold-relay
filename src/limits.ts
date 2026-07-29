@@ -17,8 +17,9 @@ export type Limits = {
    * self-inflicted outage, so it ships off and is enabled per-deploy after
    * tuning, like the origin/entitlement gates. */
   maxNewConnectionsPerIp: number;
-  /** Sliding window for maxNewConnectionsPerIp. Only meaningful when that cap
-   * is > 0. */
+  /** Fixed (tumbling) window for maxNewConnectionsPerIp — a burst straddling
+   * a window boundary can briefly see up to 2× the cap. Only meaningful when
+   * that cap is > 0. */
   newConnectionWindowMs: number;
   /** Distinct daemons (pairs) at once. */
   maxPairs: number;
@@ -75,7 +76,10 @@ export type Limits = {
   entitlementMaxTtlSeconds: number;
 };
 
-const num = (name: string, fallback: number): number => {
+// Exported for main.ts's PORT — Number("") === 0, and a set-but-empty PORT
+// would bind an ephemeral port and fail the platform health check, the same
+// accident class this guards against for every knob below.
+export const envNum = (name: string, fallback: number): number => {
   // Number("") === 0, so a set-but-empty var (an easy .env/CI accident) would
   // silently become 0 — refuse-everything or cap-disabled, depending on the
   // knob — instead of the default. Empty/whitespace means unset; "0" is honored.
@@ -90,21 +94,21 @@ export const LIMITS: Limits = {
   // the caps make legal must be sized against the actual machine (the Fly VM
   // has no [[vm]] section — the default is small). Raise per-deploy via env
   // when real usage asks for it.
-  maxConnections: num("RELAY_MAX_CONNECTIONS", 256),
-  maxConnectionsPerIp: num("RELAY_MAX_CONNECTIONS_PER_IP", 64),
-  maxNewConnectionsPerIp: num("RELAY_MAX_NEW_CONNECTIONS_PER_IP", 0),
-  newConnectionWindowMs: num("RELAY_NEW_CONNECTION_WINDOW_MS", 60_000),
-  maxPairs: num("RELAY_MAX_PAIRS", 128),
-  maxViewportsPerPair: num("RELAY_MAX_VIEWPORTS_PER_PAIR", 8),
-  maxPayloadBytes: num("RELAY_MAX_PAYLOAD_BYTES", 8_000_000),
-  rateMaxFrames: num("RELAY_RATE_MAX_FRAMES", 480),
-  rateMaxBytes: num("RELAY_RATE_MAX_BYTES", 64_000_000),
-  rateWindowMs: num("RELAY_RATE_WINDOW_MS", 1_000),
-  maxBufferedBytes: num("RELAY_MAX_BUFFERED_BYTES", 64_000_000),
-  heartbeatMs: num("RELAY_HEARTBEAT_MS", 30_000),
-  maxSockets: num("RELAY_MAX_SOCKETS", 320),
-  headersTimeoutMs: num("RELAY_HEADERS_TIMEOUT_MS", 15_000),
-  requestTimeoutMs: num("RELAY_REQUEST_TIMEOUT_MS", 20_000),
-  connectionCheckMs: num("RELAY_CONNECTION_CHECK_MS", 5_000),
-  entitlementMaxTtlSeconds: num("RELAY_ENTITLEMENT_MAX_TTL_SECONDS", 604_800), // 7 days
+  maxConnections: envNum("RELAY_MAX_CONNECTIONS", 256),
+  maxConnectionsPerIp: envNum("RELAY_MAX_CONNECTIONS_PER_IP", 64),
+  maxNewConnectionsPerIp: envNum("RELAY_MAX_NEW_CONNECTIONS_PER_IP", 0),
+  newConnectionWindowMs: envNum("RELAY_NEW_CONNECTION_WINDOW_MS", 60_000),
+  maxPairs: envNum("RELAY_MAX_PAIRS", 128),
+  maxViewportsPerPair: envNum("RELAY_MAX_VIEWPORTS_PER_PAIR", 8),
+  maxPayloadBytes: envNum("RELAY_MAX_PAYLOAD_BYTES", 8_000_000),
+  rateMaxFrames: envNum("RELAY_RATE_MAX_FRAMES", 480),
+  rateMaxBytes: envNum("RELAY_RATE_MAX_BYTES", 64_000_000),
+  rateWindowMs: envNum("RELAY_RATE_WINDOW_MS", 1_000),
+  maxBufferedBytes: envNum("RELAY_MAX_BUFFERED_BYTES", 64_000_000),
+  heartbeatMs: envNum("RELAY_HEARTBEAT_MS", 30_000),
+  maxSockets: envNum("RELAY_MAX_SOCKETS", 320),
+  headersTimeoutMs: envNum("RELAY_HEADERS_TIMEOUT_MS", 15_000),
+  requestTimeoutMs: envNum("RELAY_REQUEST_TIMEOUT_MS", 20_000),
+  connectionCheckMs: envNum("RELAY_CONNECTION_CHECK_MS", 5_000),
+  entitlementMaxTtlSeconds: envNum("RELAY_ENTITLEMENT_MAX_TTL_SECONDS", 604_800), // 7 days
 };
