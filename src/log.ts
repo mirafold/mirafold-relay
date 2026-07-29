@@ -26,7 +26,9 @@ export type RelayEvent =
   | { event: "listening"; host: string; port: number }
   | { event: "daemon_paired"; pairs: number; connections: number }
   // frames/bytes = opaque traffic forwarded across this pairing's lifetime,
-  // both directions summed — volume, never content.
+  // both directions summed — volume, never content. bytes counts payload
+  // string length (UTF-16 code units), which equals bytes for the base64/JSON
+  // text real clients send; multibyte characters would undercount slightly.
   | { event: "daemon_unpaired"; pairs: number; durationMs: number; frames: number; bytes: number }
   | { event: "viewport_opened"; viewports: number; connections: number }
   | { event: "viewport_closed"; viewports: number; durationMs: number }

@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { generateKeyPairSync, sign as signMessage, type KeyObject } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -471,6 +471,30 @@ test("drops a connection that floods past the frame-rate budget", async () => {
   }
 });
 
+test("a flood past the rate cap logs rate_limited ONCE, not once per excess frame", async () => {
+  // Closing is a handshake, not a cut: frames the flooder already sent keep
+  // arriving until the close completes, and each used to re-enter withinRate
+  // and re-log — a 50-frame flood past a cap of 3 emitted 47 rate_limited
+  // lines (2026-07-29 bughunt), turning attacker frames into log volume 1:1.
+  // The capClosed latch pins this to exactly one event per closed socket.
+  const events: RelayEvent[] = [];
+  const r = await relay({ rateMaxFrames: 3, rateWindowMs: 60_000, log: (e) => events.push(e) });
+  try {
+    const { viewport } = await paired(r);
+    const dropped = closeCode(viewport);
+    for (let i = 0; i < 50; i++) viewport.send(`flood-${i}`);
+    assert.equal(await dropped, CLOSE_RATE_LIMITED);
+    await new Promise((res) => setTimeout(res, 100)); // let the queued tail land
+    assert.equal(
+      events.filter((e) => e.event === "rate_limited").length,
+      1,
+      "one flood, one event",
+    );
+  } finally {
+    await r.close();
+  }
+});
+
 test("drops a connection that floods past the BYTE budget, frames within count", async () => {
   // 2026-07-27 audit: the frame cap alone left rateMaxFrames × maxPayloadBytes
   // legal per window. Few frames, big frames — the byte budget must fire.
@@ -554,6 +578,10 @@ test("backpressure: a stalled DAEMON is closed too, and its orphaned viewport ca
       { event: "backpressure_closed" }
     >[];
     assert.equal(bp[0]?.role, "daemon", "the event names the stalled role");
+    // The sender kept pumping while the daemon's close handshake ran; the
+    // capClosed latch must keep that tail to one event (2026-07-29 bughunt —
+    // it used to log once per frame that arrived after the close began).
+    assert.equal(bp.length, 1, "one stalled receiver, one event");
   } finally {
     await r.close();
   }
@@ -910,6 +938,58 @@ test('an empty-string env override means "unset", never 0', async () => {
   assert.equal(empty.heartbeatMs, unset.heartbeatMs); // whitespace ≡ unset
   assert.equal(unset.maxPairs, 0); // explicit "0" still means 0…
   assert.equal(empty.maxPairs, 0); // …in both runs
+});
+
+test('a set-but-empty PORT means "unset" for the entrypoint too — 8080, never port 0', async () => {
+  // main.ts used Number(process.env.PORT ?? 8080), so PORT="" (a platform-
+  // config accident) became 0 — an ephemeral port the health check could
+  // never find. envNum gives PORT the same empty-means-unset rule as every
+  // RELAY_* knob. Spawn the real entrypoint and read its listening event.
+  // If this machine already holds 8080 the bind fails EADDRINUSE — which
+  // still proves the fallback (port 0 can never collide), so both outcomes
+  // pin the fix.
+  const proc = spawn(process.execPath, ["--import", "tsx", "src/main.ts"], {
+    cwd: fileURLToPath(new URL("..", import.meta.url)),
+    env: { ...process.env, PORT: "", HOST: "127.0.0.1" },
+  });
+  try {
+    const outcome = await new Promise<{ port?: number; crash?: string }>((resolve, reject) => {
+      let out = "";
+      let errOut = "";
+      const scan = (chunk: Buffer) => {
+        out += String(chunk);
+        for (const line of out.split("\n")) {
+          if (!line.trim()) continue;
+          try {
+            const e = JSON.parse(line) as { event: string; port?: number; message?: string };
+            if (e.event === "listening") return resolve({ port: e.port });
+            if (e.event === "crash") return resolve({ crash: e.message });
+          } catch {
+            /* partial line — keep buffering */
+          }
+        }
+      };
+      proc.stdout.on("data", scan);
+      proc.stderr.on("data", (c: Buffer) => (errOut += String(c)));
+      proc.on("error", reject);
+      // A child that dies without either event (it must not — the crash
+      // handlers register before the bind) fails loudly instead of hanging
+      // the suite until the event loop drains and cancels everything after.
+      proc.on("exit", () =>
+        reject(new Error(`exited with no listening/crash event; stderr: ${errOut}`)),
+      );
+      setTimeout(() => reject(new Error(`no listening/crash event; output: ${out}`)), 10_000).unref();
+    });
+    if (outcome.crash !== undefined) {
+      assert.match(outcome.crash, /EADDRINUSE/, "only an occupied 8080 may stop the bind");
+      assert.match(outcome.crash, /8080/, "the attempted port was 8080, not 0");
+    } else {
+      assert.equal(outcome.port, 8080);
+    }
+  } finally {
+    proc.kill("SIGTERM");
+    await new Promise((res) => proc.once("exit", res));
+  }
 });
 
 test("structured log: lifecycle events carry volume metadata and never a payload, pair id, or IP", async () => {

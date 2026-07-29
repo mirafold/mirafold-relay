@@ -80,7 +80,7 @@ All values are env-overridable (`src/limits.ts`):
 | `RELAY_MAX_CONNECTIONS` | 256 | hard ceiling on live sockets — sized for launch scale and the machine's actual memory (2026-07-28; was 2000); raise per-deploy when real usage asks |
 | `RELAY_MAX_CONNECTIONS_PER_IP` | 64 | live sockets one source IP may hold (0 disables) |
 | `RELAY_MAX_NEW_CONNECTIONS_PER_IP` | 0 (off) | new connections one source IP may open per window before the rest are refused — bounds open/close churn the concurrent cap can't see; off by default (see note below) |
-| `RELAY_NEW_CONNECTION_WINDOW_MS` | 60000 | sliding window for the cap above (only meaningful when it's > 0) |
+| `RELAY_NEW_CONNECTION_WINDOW_MS` | 60000 | fixed window for the cap above — a boundary-straddling burst can briefly see 2× (only meaningful when it's > 0) |
 | `RELAY_MAX_PAIRS` | 128 | distinct daemons at once (2026-07-28; was 1000) |
 | `RELAY_MAX_VIEWPORTS_PER_PAIR` | 8 | browser viewports per pair |
 | `RELAY_MAX_PAYLOAD_BYTES` | 8000000 | single-frame ceiling |
@@ -179,7 +179,7 @@ events stay free of payloads and pairing ids.
 | --- | --- | --- |
 | `listening` | `host`, `port` | boot (the relay's own bind address) |
 | `daemon_paired` | `pairs`, `connections` | a daemon opens a pairing |
-| `daemon_unpaired` | `pairs`, `durationMs`, `frames`, `bytes` | that pairing ends — traffic *volume* across its lifetime, both directions |
+| `daemon_unpaired` | `pairs`, `durationMs`, `frames`, `bytes` | that pairing ends — traffic *volume* across its lifetime, both directions (`bytes` counts payload string length, equal to bytes for the base64 text real clients send) |
 | `viewport_opened` / `viewport_closed` | counts, `durationMs` | a browser joins/leaves a pairing |
 | `refused` | `role`, `reason`, `limit?`, `origin?` | any gate turns a socket away (`bad_pair_id`, `pair_cap`, `viewport_cap`, `connection_cap`, `per_ip_cap`, `per_ip_rate`, `origin`, `entitlement`) |
 | `rate_limited` | `frames`, `bytes`, `windowMs` | a socket exceeds the frame or byte budget and is closed |
