@@ -1,4 +1,4 @@
-# genui-relay — architecture
+# Mirafold Relay — architecture
 
 This document is for someone taking ownership of the relay. It explains what
 the service is, the vocabulary, how the code is laid out, the two or three
@@ -11,14 +11,14 @@ file is the "how and why it works" underneath both.
 
 ## 1. What this service is, in one paragraph
 
-genui-relay is a **dumb, end-to-end-blind WebSocket forwarder**. Its entire job
-is to let a [genui-shell](https://github.com/mirafold/mirafold) daemon running
+Mirafold Relay is a **dumb, end-to-end-blind WebSocket forwarder**. Its entire job
+is to let a [Mirafold](https://github.com/mirafold/mirafold) daemon running
 on someone's laptop be reached from their phone (or a second device) **without
 that laptop opening any inbound network port**. The laptop dials *out* to the
 relay; the phone connects *in* to the relay; the relay matches the two and
 shuttles opaque bytes between them. It never parses those bytes, never stores
 them, and — by design — cannot read them. It is the paid tier's substrate in
-the genui-shell roadmap (Phase R).
+the Mirafold roadmap (Phase R).
 
 The guiding principle, which every design choice below serves: **the relay is a
 liability to be minimized, not a place to add features.** The less it knows, the
@@ -43,7 +43,7 @@ it is deliberately kept small, stateless-per-restart, and vendor-neutral.
   prints/QR-codes when a user starts a remote session. It is the root of trust
   for the end-to-end encryption. **The relay never sees the code.**
 - **Pair id** — the base64url of the first 16 bytes of `SHA-256(pairing code)`
-  (a 22-character string; derived by `derivePair()` in genui-shell's
+  (a 22-character string; derived by `derivePair()` in Mirafold's
   `server/relay/relay-crypto.ts`). This is what travels to the relay in the connection
   URL (`?pair=<id>`). Because it's a one-way hash of the code, knowing the pair
   id does not reveal the code, so the relay can route on it without being able
@@ -65,11 +65,11 @@ Small on purpose — one runtime dependency (`ws`), five source files.
 | File | Responsibility |
 | --- | --- |
 | `src/relay.ts` | The whole forwarder: `startRelay()` builds the HTTP+WS server, the routing tables, the caps, and the heartbeat. Everything of substance is here. |
-| `src/contract.ts` | The routing contract — envelope types, URL paths, close codes, the minimum pair-id length. A **hand-kept mirror** of genui-shell's `server/relay/relay-protocol.ts`; see §6. |
+| `src/contract.ts` | The routing contract — envelope types, URL paths, close codes, the minimum pair-id length. A **hand-kept mirror** of Mirafold's `server/relay/relay-protocol.ts`; see §6. |
 | `src/limits.ts` | The DoS caps as an env-overridable `Limits` object. Pure config, no logic. |
 | `src/log.ts` | The structured, metadata-only event schema (`RelayEvent`) and the stdout JSON-lines logger — the typed half of README's "What the relay logs" claim. |
 | `src/main.ts` | The container entrypoint (`node dist/main.js`): reads env, calls `startRelay()`, drains on `SIGTERM`/`SIGINT`, and exits loudly on an uncaught error so the platform restarts it. |
-| `test/relay.test.ts` | Standalone suite (node:test + tsx, raw `ws` clients). Pins routing, every refusal code, and every cap. Runs with no genui-shell checkout. |
+| `test/relay.test.ts` | Standalone suite (node:test + tsx, raw `ws` clients). Pins routing, every refusal code, and every cap. Runs with no Mirafold checkout. |
 | `scripts/smoke.mjs` | Post-deploy go/no-go against a *live* relay URL. Plain Node, zero deps beyond `ws`. |
 | `scripts/load.mjs` | Load harness: ramps connections, floods frames/bytes, parks slowloris handshakes, and reports which cap fired at what threshold. Run by hand against **staging** — the caps are machine-sized, so only the deployed VM's numbers mean anything. |
 | `scripts/deployed.mjs` | `npm run deployed` — prints, per environment, the Fly release and the commit the **live image** was built from (the `GH_SHA` label the deploy workflow stamps), plus how it compares to `origin/main`. The answer to "what's running?" is read off the running machine; a planning document is history and cannot know. |
@@ -169,7 +169,7 @@ essential before you touch anything near routing or logging.
   the secret that label is derived from.
 - Every `p` payload is AES-GCM ciphertext, encrypted end-to-end between the
   daemon and the viewport using keys derived from the code. The encryption is
-  implemented on *both ends* in genui-shell's `server/relay/relay-crypto.ts` — **not
+  implemented on *both ends* in Mirafold's `server/relay/relay-crypto.ts` — **not
   in this repo at all**. From the relay's side there is nothing to decrypt with;
   it only ever forwards `p`.
 - The relay's logs record connection *metadata* only — pair counts, connection
@@ -192,25 +192,25 @@ only Fly's edge can set `fly-client-ip`, so it's trustworthy there.
 
 ## 6. The two-repo relationship
 
-genui-relay is a **standalone, open-source (MIT) repo** — relicensed
-2026-07-15; the earlier open-core split ("genui-shell is MIT, the hosted
+Mirafold Relay is a **standalone, open-source (MIT) repo** — relicensed
+2026-07-15; the earlier open-core split ("Mirafold is MIT, the hosted
 relay is not") was reversed, since what's sold is the hosted instance, not
 the code — and it is the relay's **single source of truth**. (Until the first deploy, a byte-identical dev copy lived inside
-genui-shell at `relay-service/`, held in lockstep by a sync script; that copy
+Mirafold at `relay-service/`, held in lockstep by a sync script; that copy
 and the sync were retired 2026-07-15, once the relay was live.)
 
 What still crosses the repo boundary:
-- **The real-daemon integration test lives in genui-shell.**
+- **The real-daemon integration test lives in Mirafold.**
   `server/relay/relay-service.itest.ts` (Tier 2, `yarn test:server`) stands up the
   real Mirafold daemon dialing the real service — importing `src/relay.ts` and
   `src/contract.ts` from this repo as a **sibling checkout**
-  (`../genui-relay/`). Keep the two repos checked out side by side and run that
+  (`../mirafold-relay/`). Keep the two repos checked out side by side and run that
   suite after any relay change; the standalone `test/` suite here needs no
-  genui-shell checkout.
+  Mirafold checkout.
 - **`src/contract.ts` is a hand-kept mirror.** A separate repo cannot import
-  from genui-shell, so the small, stable routing contract is *duplicated* from
-  genui-shell's `server/relay/relay-protocol.ts`. The two must stay in agreement on
-  the parts both ends rely on; a **contract-guard test** in genui-shell's
+  from Mirafold, so the small, stable routing contract is *duplicated* from
+  Mirafold's `server/relay/relay-protocol.ts`. The two must stay in agreement on
+  the parts both ends rely on; a **contract-guard test** in Mirafold's
   `relay-service.itest.ts` fails loudly if they diverge (a silent divergence
   would break pairing in production). If you change the contract, change both
   repos in the same sitting and let that test prove the match.
@@ -243,7 +243,7 @@ What still crosses the repo boundary:
   encryption stops the relay *reading* traffic, but a relay that also served the
   phone's app bundle could ship tampered JS that steals the pairing code from
   the URL fragment *before* encryption happens — the honest asterisk on every
-  browser "E2E" story. genui-relay closes that structurally by serving no JS at
+  browser "E2E" story. Mirafold Relay closes that structurally by serving no JS at
   all: the phone loads the app from a *separate* static origin and only then
   opens the encrypted socket. A compromised relay can drop or scramble
   ciphertext (denial of service) but can neither read it nor inject page code.
@@ -334,8 +334,8 @@ load-tested on real hardware under R.6.
 
 ## 9. Where things stand / the roadmap
 
-genui-relay has **no roadmap of its own** — it is one step in genui-shell's plan.
-The single source of truth for status and next steps is **genui-shell's
+Mirafold Relay has **no roadmap of its own** — it is one step in Mirafold's plan.
+The single source of truth for status and next steps is **Mirafold's
 `PLAN.md`, Phase R**:
 
 - **R.2** is this service. Status as of 2026-07-13: code complete and verified,
@@ -363,7 +363,7 @@ Do not duplicate that plan here; read it there.
 
 ## 10. Known limitations (honest list)
 
-- **No forward secrecy** in the encryption scheme (a genui-shell concern, not
+- **No forward secrecy** in the encryption scheme (a Mirafold concern, not
   this repo's): if a pairing code leaks *later*, previously recorded ciphertext
   could be opened. Per-launch codes bound the window today; an ECDH handshake is
   the documented v2 candidate.

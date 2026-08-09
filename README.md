@@ -1,22 +1,22 @@
-# genui-relay
+# Mirafold Relay
 
-The hosted relay for [genui-shell](https://github.com/mirafold/mirafold) — a
-**dumb, end-to-end-blind WebSocket forwarder**. It lets a genui-shell daemon
+The hosted relay for [Mirafold](https://github.com/mirafold/mirafold) — a
+**dumb, end-to-end-blind WebSocket forwarder**. It lets a Mirafold daemon
 running on your machine be reached from a phone or a second device without
 opening any inbound port: the daemon dials *out* to the relay, the browser
 connects *in*, and the relay shuttles opaque frames between them. It is the
-paid tier's substrate (genui-shell PLAN Phase R).
+paid tier's substrate (Mirafold PLAN Phase R).
 
 > **Open source (MIT)** — relicensed 2026-07-15, reversing the earlier
-> open-core split (genui-shell PLAN Phase K.1). The paid tier sells the
+> open-core split (Mirafold PLAN Phase K.1). The paid tier sells the
 > *hosted* convenience (`relay.mirafold.sh`), not code secrecy — open relay
 > code lets anyone verify exactly what the relay can and cannot see, which
 > is the point of an E2E-blind design. Self-hosting is expected and fine.
-> The repo itself flips public with the product launch (sequenced by the
-> product's release plan). It is the relay's **single source of truth**
-> (since the first deploy; genui-shell's vendored `relay-service/` dev copy
+> The repo has been public since 2026-07-31. It is the relay's
+> **single source of truth**
+> (since the first deploy; Mirafold's vendored `relay-service/` dev copy
 > and the sync scripts were retired 2026-07-15). The service is still verified
-> against the REAL daemon from genui-shell: its `server/relay/relay-service.itest.ts`
+> against the REAL daemon from Mirafold: its `server/relay/relay-service.itest.ts`
 > imports `src/` from this repo as a sibling checkout.
 
 ## What it does, and deliberately does not
@@ -25,12 +25,12 @@ paid tier's substrate (genui-shell PLAN Phase R).
   viewports (`/ws?pair=<id>`) by pair id, and forwards frames between them.
 - **Never parses payloads.** The `p` field of every envelope is the
   end-to-end-encrypted WireMsg/ClientMsg (AES-GCM, keyed off the pairing code
-  the relay never sees — see genui-shell `server/relay/relay-crypto.ts`). The relay
+  the relay never sees — see Mirafold `server/relay/relay-crypto.ts`). The relay
   routes on `t`/`v`/`pair` only. It logs no frame contents and stores nothing.
 - **Serves no application bundle.** The only HTTP it answers is `GET /health`.
 - **Enforces no credential policy — that lives in the daemon.** Only API-key or
   local/BYO sessions may be driven over the relay; a subscription-backed session
-  is refused *by the genui-shell daemon* (`server/provider-policy.ts`, PLAN
+  is refused *by the Mirafold daemon* (`server/provider-policy.ts`, PLAN
   R.4i), before any frame is sent, independent of the paid entitlement (R.5).
   Because the relay is E2E-blind it can't tell one session from another anyway —
   and doesn't need to. The rule: charging for remote access to a
@@ -44,14 +44,14 @@ also served the phone's app bundle could ship tampered JavaScript that reads
 the pairing code out of the URL fragment before encryption ever happens — the
 honest asterisk on every browser "E2E" story.
 
-genui-relay closes that hole structurally: **it is a pure forwarder and serves
-no JS.** The phone loads the genui-shell web app from a **separate static
+Mirafold Relay closes that hole structurally: **it is a pure forwarder and serves
+no JS.** The phone loads the Mirafold web app from a **separate static
 origin** (the landing-page host), and only *then* opens an encrypted WebSocket
 to the relay. A compromised relay can drop or scramble ciphertext (denial of
 service) but can neither read it nor inject code into the page that produced
 it. (The considered alternative — tunnelling the app bundle *through* the
 daemon so client and daemon are always the same version — is a larger change
-kept in reserve; genui-shell's tolerant wire schemas already make the
+kept in reserve; Mirafold's tolerant wire schemas already make the
 static-origin path's version skew survivable.)
 
 ### Versioning
@@ -232,7 +232,7 @@ DEPLOY.md         the deploy-day runbook, command by command
 New to this service? **[ARCHITECTURE.md](ARCHITECTURE.md)** is the guided tour —
 the vocabulary (daemon, viewport, pair, pairing code), how a frame is routed end
 to end, exactly what the relay can and cannot see, the two-repo relationship
-with genui-shell, and the reasoning behind every constraint.
+with Mirafold, and the reasoning behind every constraint.
 
 ## Run and test it
 
@@ -247,7 +247,7 @@ npm run build && npm start
 Point a daemon at it: `MIRAFOLD_RELAY_URL=ws://localhost:8080 mirafold`.
 
 The deeper cross-repo check — a real daemon driving a full remote turn through
-this service — lives in genui-shell: `yarn test:server` runs
+this service — lives in Mirafold: `yarn test:server` runs
 `server/relay/relay-service.itest.ts` (12 tests) against this code.
 
 ## Deploy

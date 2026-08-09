@@ -1,7 +1,7 @@
 // The relay routing contract — VENDORED.
 //
-// This repo can't import from genui-shell, so the tiny, stable routing
-// contract is duplicated here. The daemon/browser copy is genui-shell's
+// This repo can't import from Mirafold, so the tiny, stable routing
+// contract is duplicated here. The daemon/browser copy is Mirafold's
 // `server/relay/relay-protocol.ts`; the shared constants below MUST stay
 // byte-identical to it, and `server/relay/relay-service.itest.ts` has a
 // guard test that fails if they drift.

@@ -1,4 +1,4 @@
-# genui-relay — a tiny, dependency-light forwarder. Multi-stage: build the TS,
+# Mirafold Relay — a tiny, dependency-light forwarder. Multi-stage: build the TS,
 # ship only production deps + compiled JS on a slim runtime.
 FROM node:22-slim AS build
 WORKDIR /app

@@ -97,7 +97,7 @@ Green means: health answers over HTTPS, a daemon and viewport pair up, an
 opaque payload round-trips byte-identically, a bogus pair id is refused, and —
 with the origin gate on — an origin-less viewport is refused.
 
-Then the real thing, from the genui-shell repo on your machine:
+Then the real thing, from the Mirafold repo on your machine:
 
 ```
 MIRAFOLD_RELAY_URL=wss://relay.<your-domain> yarn dev
@@ -156,12 +156,12 @@ Two standing constraints from `fly.toml`, do not "optimize" them away:
 
 ## 5. After the first deploy
 
-- **Done 2026-07-15 (genui-shell PLAN Phase G):** this repo is the source of
-  truth; genui-shell's `relay-service/` copy was reduced to a pointer README
-  (removed entirely later that day, genui-shell H2.3) and the sync
-  scripts are gone. genui-shell's real-daemon itest now imports the relay from
+- **Done 2026-07-15 (Mirafold PLAN Phase G):** this repo is the source of
+  truth; Mirafold's `relay-service/` copy was reduced to a pointer README
+  (removed entirely later that day, Mirafold H2.3) and the sync
+  scripts are gone. Mirafold's real-daemon itest now imports the relay from
   this repo as a sibling checkout.
-- Update genui-shell PLAN R.2: check the box with the date and the domain.
+- Update Mirafold PLAN R.2: check the box with the date and the domain.
 - The daemon's default relay URL (today `MIRAFOLD_RELAY_URL` must be set by
   hand) gets baked in as the paid-tier default during R.5 entitlement work.
 

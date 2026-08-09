@@ -14,7 +14,7 @@
 // Proves, against the LIVE relay: (1) /health answers over HTTPS, (2) a daemon
 // dial-in and a viewport pair up, (3) an opaque payload round-trips both ways
 // byte-identically, (4) a wrong pair id is refused, and — when an origin is
-// given — (5) a viewport with no Origin is refused. No genui-shell checkout,
+// given — (5) a viewport with no Origin is refused. No Mirafold checkout,
 // no real daemon — this is the transport-level go/no-go, not the full E2E
 // (that's a real phone driving a session, PLAN R.6).
 
