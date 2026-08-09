@@ -1,4 +1,4 @@
-# Contributing to genui-relay
+# Contributing to Mirafold Relay
 
 ## Sign your commits (DCO)
 

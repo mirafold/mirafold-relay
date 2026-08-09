@@ -1,4 +1,4 @@
-// genui-relay capacity + policy limits — the DoS posture, mirroring the
+// Mirafold Relay capacity + policy limits — the DoS posture, mirroring the
 // daemon's (bounded everything, refuse rather than degrade). Every value is
 // env-overridable for tuning without a redeploy; startRelay() options win
 // over env (the tests pass options directly).

@@ -1,4 +1,4 @@
-// genui-relay entrypoint — the container's CMD. Reads PORT/HOST from the
+// Mirafold Relay entrypoint — the container's CMD. Reads PORT/HOST from the
 // environment (limits come from env inside limits.ts), starts the forwarder,
 // and shuts down cleanly on SIGTERM/SIGINT (the platform's stop signal).
 

@@ -1,6 +1,6 @@
-// genui-relay — the deployable dumb forwarder (PLAN Step R.2).
+// Mirafold Relay — the deployable dumb forwarder (PLAN Step R.2).
 //
-// The stub's shape (genui-shell server/relay/relay-stub.ts) grown up for the world:
+// The stub's shape (Mirafold server/relay/relay-stub.ts) grown up for the world:
 // same routing, hardened for a public port. It matches ONE daemon dial-in to
 // any number of browser viewports by pair id and shuttles opaque payloads. It
 // parses only the envelope's routing fields (`t`/`v`/`pair`), never `p` (the
@@ -196,7 +196,7 @@ export function startRelay(opts: RelayOptions = {}): Promise<Relay> {
         res.writeHead(200, { "content-type": "text/plain" }).end("ok");
         return;
       }
-      res.writeHead(404, { "content-type": "text/plain" }).end("genui-relay: not found");
+      res.writeHead(404, { "content-type": "text/plain" }).end("mirafold-relay: not found");
     },
   );
   // maxConnections is a net.Server property and DOES take effect post-construction
