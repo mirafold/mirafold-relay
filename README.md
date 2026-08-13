@@ -19,6 +19,10 @@ paid tier's substrate (Mirafold PLAN Phase R).
 > against the REAL daemon from Mirafold: its `server/relay/relay-service.itest.ts`
 > imports `src/` from this repo as a sibling checkout.
 
+`GLOSSARY.md` is the Mirafold product vocabulary — *session*, *viewport*,
+*relay*, *daemon*, *connect device*, and the shell-side terms. Docs and code
+comments here use those terms.
+
 ## What it does, and deliberately does not
 
 - **Matches** one daemon dial-in (`/daemon?pair=<id>`) to any number of browser
